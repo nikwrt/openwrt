@@ -108,10 +108,10 @@ ifeq ($(DUMP),)
 		echo "Maintainer: $(MAINTAINER)"; \
 		echo "Architecture: $(PKGARCH)"; \
 		echo "Installed-Size: 0"; \
-		echo -n "Description: "; getvar $(call shvar,Package/$(1)/description) | sed -e 's,^[[:space:]]*, ,g'; \
+		echo -n "Description: "; $(SH_FUNC) getvar $(call shvar,Package/$(1)/description) | sed -e 's,^[[:space:]]*, ,g'; \
  	) >> $$(IDIR_$(1))/CONTROL/control
 	chmod 644 $$(IDIR_$(1))/CONTROL/control
-	(cd $$(IDIR_$(1))/CONTROL; \
+	$(SH_FUNC) (cd $$(IDIR_$(1))/CONTROL; \
 		$($(1)_COMMANDS) \
 	)
 	$(call Package/$(1)/install,$$(IDIR_$(1)))
