@@ -3,13 +3,16 @@ This is nikwrt's Backfire (10.03.x) OpenWrt Linux fork.
 Motivation: older routers with only 4 MB flash and 16 MB RAM
 do not work well (or at all) with later OpenWrt releases. 
 
-Unfortunately, Backfire no longer builds on current Linux
+Unfortunately Backfire no longer builds on current Linux
 distributions following security fixes in recent versions 
-of bash. In addition, Backfire is EOL and no patches are 
+of bash. In addition Backfire is EOL and no patches are 
 accepted anymore: https://dev.openwrt.org/ticket/20859
 
-This fork includes a minimal set of changes to allow building 
-on current systems (tested on Debian Jessie x64).
+This fork starts with a minimal set of changes to allow 
+building on current systems (tested on Debian Jessie x64).
+
+Further patches to refresh important packages will follow
+in due course.
 
 Have fun,
 nikwrt
