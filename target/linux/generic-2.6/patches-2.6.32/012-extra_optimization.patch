@@ -9,7 +9,7 @@
  endif
  
  include $(srctree)/arch/$(SRCARCH)/Makefile
-@@ -561,6 +561,9 @@ endif
+@@ -564,6 +564,9 @@ endif
  NOSTDINC_FLAGS += -nostdinc -isystem $(shell $(CC) -print-file-name=include)
  CHECKFLAGS     += $(NOSTDINC_FLAGS)
  

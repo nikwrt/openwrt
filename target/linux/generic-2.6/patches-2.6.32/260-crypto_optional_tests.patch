@@ -54,7 +54,7 @@
  #define MAX_DIGEST_SIZE		64
  #define MAX_TAP			8
  
-@@ -9537,4 +9539,6 @@ static struct hash_testvec crc32c_tv_tem
+@@ -9539,4 +9541,6 @@ static struct hash_testvec crc32c_tv_tem
  	},
  };
  

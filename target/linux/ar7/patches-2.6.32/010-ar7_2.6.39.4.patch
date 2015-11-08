@@ -1,0 +1,2302 @@
+--- a/arch/mips/ar7/clock.c
++++ b/arch/mips/ar7/clock.c
+@@ -1,6 +1,7 @@
+ /*
+  * Copyright (C) 2007 Felix Fietkau <nbd@openwrt.org>
+  * Copyright (C) 2007 Eugene Konev <ejka@openwrt.org>
++ * Copyright (C) 2009 Florian Fainelli <florian@openwrt.org>
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
+@@ -24,6 +25,8 @@
+ #include <linux/delay.h>
+ #include <linux/gcd.h>
+ #include <linux/io.h>
++#include <linux/err.h>
++#include <linux/clk.h>
+ 
+ #include <asm/addrspace.h>
+ #include <asm/mach-ar7/ar7.h>
+@@ -94,12 +97,16 @@ struct tnetd7200_clocks {
+ 	struct tnetd7200_clock usb;
+ };
+ 
+-int ar7_cpu_clock = 150000000;
+-EXPORT_SYMBOL(ar7_cpu_clock);
+-int ar7_bus_clock = 125000000;
+-EXPORT_SYMBOL(ar7_bus_clock);
+-int ar7_dsp_clock;
+-EXPORT_SYMBOL(ar7_dsp_clock);
++static struct clk bus_clk = {
++	.rate	= 125000000,
++};
++
++static struct clk cpu_clk = {
++	.rate	= 150000000,
++};
++
++static struct clk dsp_clk;
++static struct clk vbus_clk;
+ 
+ static void approximate(int base, int target, int *prediv,
+ 			int *postdiv, int *mul)
+@@ -185,7 +192,7 @@ static int tnetd7300_get_clock(u32 shift
+ 		base_clock = AR7_XTAL_CLOCK;
+ 		break;
+ 	case BOOT_PLL_SOURCE_CPU:
+-		base_clock = ar7_cpu_clock;
++		base_clock = cpu_clk.rate;
+ 		break;
+ 	}
+ 
+@@ -212,11 +219,11 @@ static void tnetd7300_set_clock(u32 shif
+ 	u32 *bootcr, u32 frequency)
+ {
+ 	int prediv, postdiv, mul;
+-	int base_clock = ar7_bus_clock;
++	int base_clock = bus_clk.rate;
+ 
+ 	switch ((*bootcr & (BOOT_PLL_SOURCE_MASK << shift)) >> shift) {
+ 	case BOOT_PLL_SOURCE_BUS:
+-		base_clock = ar7_bus_clock;
++		base_clock = bus_clk.rate;
+ 		break;
+ 	case BOOT_PLL_SOURCE_REF:
+ 		base_clock = AR7_REF_CLOCK;
+@@ -225,19 +232,19 @@ static void tnetd7300_set_clock(u32 shif
+ 		base_clock = AR7_XTAL_CLOCK;
+ 		break;
+ 	case BOOT_PLL_SOURCE_CPU:
+-		base_clock = ar7_cpu_clock;
++		base_clock = cpu_clk.rate;
+ 		break;
+ 	}
+ 
+ 	calculate(base_clock, frequency, &prediv, &postdiv, &mul);
+ 
+ 	writel(((prediv - 1) << PREDIV_SHIFT) | (postdiv - 1), &clock->ctrl);
+-	msleep(1);
++	mdelay(1);
+ 	writel(4, &clock->pll);
+ 	while (readl(&clock->pll) & PLL_STATUS)
+ 		;
+ 	writel(((mul - 1) << MUL_SHIFT) | (0xff << 3) | 0x0e, &clock->pll);
+-	msleep(75);
++	mdelay(75);
+ }
+ 
+ static void __init tnetd7300_init_clocks(void)
+@@ -247,18 +254,18 @@ static void __init tnetd7300_init_clocks
+ 					ioremap_nocache(UR8_REGS_CLOCKS,
+ 					sizeof(struct tnetd7300_clocks));
+ 
+-	ar7_bus_clock = tnetd7300_get_clock(BUS_PLL_SOURCE_SHIFT,
++	bus_clk.rate = tnetd7300_get_clock(BUS_PLL_SOURCE_SHIFT,
+ 		&clocks->bus, bootcr, AR7_AFE_CLOCK);
+ 
+ 	if (*bootcr & BOOT_PLL_ASYNC_MODE)
+-		ar7_cpu_clock = tnetd7300_get_clock(CPU_PLL_SOURCE_SHIFT,
++		cpu_clk.rate = tnetd7300_get_clock(CPU_PLL_SOURCE_SHIFT,
+ 			&clocks->cpu, bootcr, AR7_AFE_CLOCK);
+ 	else
+-		ar7_cpu_clock = ar7_bus_clock;
++		cpu_clk.rate = bus_clk.rate;
+ 
+-	if (ar7_dsp_clock == 250000000)
++	if (dsp_clk.rate == 250000000)
+ 		tnetd7300_set_clock(DSP_PLL_SOURCE_SHIFT, &clocks->dsp,
+-			bootcr, ar7_dsp_clock);
++			bootcr, dsp_clk.rate);
+ 
+ 	iounmap(clocks);
+ 	iounmap(bootcr);
+@@ -343,20 +350,20 @@ static void __init tnetd7200_init_clocks
+ 		printk(KERN_INFO "Clocks: Setting DSP clock\n");
+ 		calculate(dsp_base, TNETD7200_DEF_DSP_CLK,
+ 			&dsp_prediv, &dsp_postdiv, &dsp_mul);
+-		ar7_bus_clock =
++		bus_clk.rate =
+ 			((dsp_base / dsp_prediv) * dsp_mul) / dsp_postdiv;
+ 		tnetd7200_set_clock(dsp_base, &clocks->dsp,
+ 			dsp_prediv, dsp_postdiv * 2, dsp_postdiv, dsp_mul * 2,
+-			ar7_bus_clock);
++			bus_clk.rate);
+ 
+ 		printk(KERN_INFO "Clocks: Setting CPU clock\n");
+ 		calculate(cpu_base, TNETD7200_DEF_CPU_CLK, &cpu_prediv,
+ 			&cpu_postdiv, &cpu_mul);
+-		ar7_cpu_clock =
++		cpu_clk.rate =
+ 			((cpu_base / cpu_prediv) * cpu_mul) / cpu_postdiv;
+ 		tnetd7200_set_clock(cpu_base, &clocks->cpu,
+ 			cpu_prediv, cpu_postdiv, -1, cpu_mul,
+-			ar7_cpu_clock);
++			cpu_clk.rate);
+ 
+ 	} else
+ 		if (*bootcr & BOOT_PLL_2TO1_MODE) {
+@@ -365,49 +372,91 @@ static void __init tnetd7200_init_clocks
+ 			printk(KERN_INFO "Clocks: Setting CPU clock\n");
+ 			calculate(cpu_base, TNETD7200_DEF_CPU_CLK, &cpu_prediv,
+ 				&cpu_postdiv, &cpu_mul);
+-			ar7_cpu_clock = ((cpu_base / cpu_prediv) * cpu_mul)
++			cpu_clk.rate = ((cpu_base / cpu_prediv) * cpu_mul)
+ 								/ cpu_postdiv;
+ 			tnetd7200_set_clock(cpu_base, &clocks->cpu,
+ 				cpu_prediv, cpu_postdiv, -1, cpu_mul,
+-				ar7_cpu_clock);
++				cpu_clk.rate);
+ 
+ 			printk(KERN_INFO "Clocks: Setting DSP clock\n");
+ 			calculate(dsp_base, TNETD7200_DEF_DSP_CLK, &dsp_prediv,
+ 				&dsp_postdiv, &dsp_mul);
+-			ar7_bus_clock = ar7_cpu_clock / 2;
++			bus_clk.rate = cpu_clk.rate / 2;
+ 			tnetd7200_set_clock(dsp_base, &clocks->dsp,
+ 				dsp_prediv, dsp_postdiv * 2, dsp_postdiv,
+-				dsp_mul * 2, ar7_bus_clock);
++				dsp_mul * 2, bus_clk.rate);
+ 		} else {
+ 			printk(KERN_INFO "Clocks: Sync 1:1 mode\n");
+ 
+ 			printk(KERN_INFO "Clocks: Setting DSP clock\n");
+ 			calculate(dsp_base, TNETD7200_DEF_DSP_CLK, &dsp_prediv,
+ 				&dsp_postdiv, &dsp_mul);
+-			ar7_bus_clock = ((dsp_base / dsp_prediv) * dsp_mul)
++			bus_clk.rate = ((dsp_base / dsp_prediv) * dsp_mul)
+ 								/ dsp_postdiv;
+ 			tnetd7200_set_clock(dsp_base, &clocks->dsp,
+ 				dsp_prediv, dsp_postdiv * 2, dsp_postdiv,
+-				dsp_mul * 2, ar7_bus_clock);
++				dsp_mul * 2, bus_clk.rate);
+ 
+-			ar7_cpu_clock = ar7_bus_clock;
++			cpu_clk.rate = bus_clk.rate;
+ 		}
+ 
+ 	printk(KERN_INFO "Clocks: Setting USB clock\n");
+-	usb_base = ar7_bus_clock;
++	usb_base = bus_clk.rate;
+ 	calculate(usb_base, TNETD7200_DEF_USB_CLK, &usb_prediv,
+ 		&usb_postdiv, &usb_mul);
+ 	tnetd7200_set_clock(usb_base, &clocks->usb,
+ 		usb_prediv, usb_postdiv, -1, usb_mul,
+ 		TNETD7200_DEF_USB_CLK);
+ 
+-	ar7_dsp_clock = ar7_cpu_clock;
++	dsp_clk.rate = cpu_clk.rate;
+ 
+ 	iounmap(clocks);
+ 	iounmap(bootcr);
+ }
+ 
+-int __init ar7_init_clocks(void)
++/*
++ * Linux clock API
++ */
++int clk_enable(struct clk *clk)
++{
++	return 0;
++}
++EXPORT_SYMBOL(clk_enable);
++
++void clk_disable(struct clk *clk)
++{
++}
++EXPORT_SYMBOL(clk_disable);
++
++unsigned long clk_get_rate(struct clk *clk)
++{
++	return clk->rate;
++}
++EXPORT_SYMBOL(clk_get_rate);
++
++struct clk *clk_get(struct device *dev, const char *id)
++{
++	if (!strcmp(id, "bus"))
++		return &bus_clk;
++	/* cpmac and vbus share the same rate */
++	if (!strcmp(id, "cpmac"))
++		return &vbus_clk;
++	if (!strcmp(id, "cpu"))
++		return &cpu_clk;
++	if (!strcmp(id, "dsp"));
++		return &dsp_clk;
++	if (!strcmp(id, "vbus"))
++		return &vbus_clk;
++	return ERR_PTR(-ENOENT);
++}
++EXPORT_SYMBOL(clk_get);
++
++void clk_put(struct clk *clk)
++{
++}
++EXPORT_SYMBOL(clk_put);
++
++void __init ar7_init_clocks(void)
+ {
+ 	switch (ar7_chip_id()) {
+ 	case AR7_CHIP_7100:
+@@ -415,13 +464,12 @@ int __init ar7_init_clocks(void)
+ 		tnetd7200_init_clocks();
+ 		break;
+ 	case AR7_CHIP_7300:
+-		ar7_dsp_clock = tnetd7300_dsp_clock();
++		dsp_clk.rate = tnetd7300_dsp_clock();
+ 		tnetd7300_init_clocks();
+ 		break;
+ 	default:
+ 		break;
+ 	}
+-
+-	return 0;
++	/* adjust vbus clock rate */
++	vbus_clk.rate = bus_clk.rate / 2;
+ }
+-arch_initcall(ar7_init_clocks);
+--- a/arch/mips/ar7/gpio.c
++++ b/arch/mips/ar7/gpio.c
+@@ -1,6 +1,7 @@
+ /*
+  * Copyright (C) 2007 Felix Fietkau <nbd@openwrt.org>
+  * Copyright (C) 2007 Eugene Konev <ejka@openwrt.org>
++ * Copyright (C) 2009-2010 Florian Fainelli <florian@openwrt.org>
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
+@@ -18,31 +19,330 @@
+  */
+ 
+ #include <linux/module.h>
++#include <linux/gpio.h>
+ 
+ #include <asm/mach-ar7/gpio.h>
+ 
+-static const char *ar7_gpio_list[AR7_GPIO_MAX];
++struct ar7_gpio_chip {
++	void __iomem		*regs;
++	struct gpio_chip	chip;
++};
+ 
+-int gpio_request(unsigned gpio, const char *label)
++static int ar7_gpio_get_value(struct gpio_chip *chip, unsigned gpio)
+ {
+-	if (gpio >= AR7_GPIO_MAX)
++	struct ar7_gpio_chip *gpch =
++				container_of(chip, struct ar7_gpio_chip, chip);
++	void __iomem *gpio_in = gpch->regs + AR7_GPIO_INPUT;
++
++	return readl(gpio_in) & (1 << gpio);
++}
++
++static int titan_gpio_get_value(struct gpio_chip *chip, unsigned gpio)
++{
++	struct ar7_gpio_chip *gpch =
++				container_of(chip, struct ar7_gpio_chip, chip);
++	void __iomem *gpio_in0 = gpch->regs + TITAN_GPIO_INPUT_0;
++	void __iomem *gpio_in1 = gpch->regs + TITAN_GPIO_INPUT_1;
++
++	return readl(gpio >> 5 ? gpio_in1 : gpio_in0) & (1 << (gpio & 0x1f));
++}
++
++static void ar7_gpio_set_value(struct gpio_chip *chip,
++				unsigned gpio, int value)
++{
++	struct ar7_gpio_chip *gpch =
++				container_of(chip, struct ar7_gpio_chip, chip);
++	void __iomem *gpio_out = gpch->regs + AR7_GPIO_OUTPUT;
++	unsigned tmp;
++
++	tmp = readl(gpio_out) & ~(1 << gpio);
++	if (value)
++		tmp |= 1 << gpio;
++	writel(tmp, gpio_out);
++}
++
++static void titan_gpio_set_value(struct gpio_chip *chip,
++				unsigned gpio, int value)
++{
++	struct ar7_gpio_chip *gpch =
++				container_of(chip, struct ar7_gpio_chip, chip);
++	void __iomem *gpio_out0 = gpch->regs + TITAN_GPIO_OUTPUT_0;
++	void __iomem *gpio_out1 = gpch->regs + TITAN_GPIO_OUTPUT_1;
++	unsigned tmp;
++
++	tmp = readl(gpio >> 5 ? gpio_out1 : gpio_out0) & ~(1 << (gpio & 0x1f));
++	if (value)
++		tmp |= 1 << (gpio & 0x1f);
++	writel(tmp, gpio >> 5 ? gpio_out1 : gpio_out0);
++}
++
++static int ar7_gpio_direction_input(struct gpio_chip *chip, unsigned gpio)
++{
++	struct ar7_gpio_chip *gpch =
++				container_of(chip, struct ar7_gpio_chip, chip);
++	void __iomem *gpio_dir = gpch->regs + AR7_GPIO_DIR;
++
++	writel(readl(gpio_dir) | (1 << gpio), gpio_dir);
++
++	return 0;
++}
++
++static int titan_gpio_direction_input(struct gpio_chip *chip, unsigned gpio)
++{
++	struct ar7_gpio_chip *gpch =
++				container_of(chip, struct ar7_gpio_chip, chip);
++	void __iomem *gpio_dir0 = gpch->regs + TITAN_GPIO_DIR_0;
++	void __iomem *gpio_dir1 = gpch->regs + TITAN_GPIO_DIR_1;
++
++	if (gpio >= TITAN_GPIO_MAX)
+ 		return -EINVAL;
+ 
+-	if (ar7_gpio_list[gpio])
+-		return -EBUSY;
++	writel(readl(gpio >> 5 ? gpio_dir1 : gpio_dir0) | (1 << (gpio & 0x1f)),
++			gpio >> 5 ? gpio_dir1 : gpio_dir0);
++	return 0;
++}
++
++static int ar7_gpio_direction_output(struct gpio_chip *chip,
++					unsigned gpio, int value)
++{
++	struct ar7_gpio_chip *gpch =
++				container_of(chip, struct ar7_gpio_chip, chip);
++	void __iomem *gpio_dir = gpch->regs + AR7_GPIO_DIR;
++
++	ar7_gpio_set_value(chip, gpio, value);
++	writel(readl(gpio_dir) & ~(1 << gpio), gpio_dir);
++
++	return 0;
++}
++
++static int titan_gpio_direction_output(struct gpio_chip *chip,
++					unsigned gpio, int value)
++{
++	struct ar7_gpio_chip *gpch =
++				container_of(chip, struct ar7_gpio_chip, chip);
++	void __iomem *gpio_dir0 = gpch->regs + TITAN_GPIO_DIR_0;
++	void __iomem *gpio_dir1 = gpch->regs + TITAN_GPIO_DIR_1;
++
++	if (gpio >= TITAN_GPIO_MAX)
++		return -EINVAL;
+ 
+-	if (label)
+-		ar7_gpio_list[gpio] = label;
+-	else
+-		ar7_gpio_list[gpio] = "busy";
++	titan_gpio_set_value(chip, gpio, value);
++	writel(readl(gpio >> 5 ? gpio_dir1 : gpio_dir0) & ~(1 <<
++		(gpio & 0x1f)), gpio >> 5 ? gpio_dir1 : gpio_dir0);
+ 
+ 	return 0;
+ }
+-EXPORT_SYMBOL(gpio_request);
+ 
+-void gpio_free(unsigned gpio)
++static struct ar7_gpio_chip ar7_gpio_chip = {
++	.chip = {
++		.label			= "ar7-gpio",
++		.direction_input	= ar7_gpio_direction_input,
++		.direction_output	= ar7_gpio_direction_output,
++		.set			= ar7_gpio_set_value,
++		.get			= ar7_gpio_get_value,
++		.base			= 0,
++		.ngpio			= AR7_GPIO_MAX,
++	}
++};
++
++static struct ar7_gpio_chip titan_gpio_chip = {
++	.chip = {
++		.label			= "titan-gpio",
++		.direction_input	= titan_gpio_direction_input,
++		.direction_output	= titan_gpio_direction_output,
++		.set			= titan_gpio_set_value,
++		.get			= titan_gpio_get_value,
++		.base			= 0,
++		.ngpio			= TITAN_GPIO_MAX,
++	}
++};
++
++static inline int ar7_gpio_enable_ar7(unsigned gpio)
+ {
+-	BUG_ON(!ar7_gpio_list[gpio]);
+-	ar7_gpio_list[gpio] = NULL;
++	void __iomem *gpio_en = ar7_gpio_chip.regs + AR7_GPIO_ENABLE;
++
++	writel(readl(gpio_en) | (1 << gpio), gpio_en);
++
++	return 0;
++}
++
++static inline int ar7_gpio_enable_titan(unsigned gpio)
++{
++	void __iomem *gpio_en0 = titan_gpio_chip.regs  + TITAN_GPIO_ENBL_0;
++	void __iomem *gpio_en1 = titan_gpio_chip.regs  + TITAN_GPIO_ENBL_1;
++
++	writel(readl(gpio >> 5 ? gpio_en1 : gpio_en0) | (1 << (gpio & 0x1f)),
++		gpio >> 5 ? gpio_en1 : gpio_en0);
++
++	return 0;
++}
++
++int ar7_gpio_enable(unsigned gpio)
++{
++	return ar7_is_titan() ? ar7_gpio_enable_titan(gpio) :
++				ar7_gpio_enable_ar7(gpio);
++}
++EXPORT_SYMBOL(ar7_gpio_enable);
++
++static inline int ar7_gpio_disable_ar7(unsigned gpio)
++{
++	void __iomem *gpio_en = ar7_gpio_chip.regs + AR7_GPIO_ENABLE;
++
++	writel(readl(gpio_en) & ~(1 << gpio), gpio_en);
++
++	return 0;
++}
++
++static inline int ar7_gpio_disable_titan(unsigned gpio)
++{
++	void __iomem *gpio_en0 = titan_gpio_chip.regs + TITAN_GPIO_ENBL_0;
++	void __iomem *gpio_en1 = titan_gpio_chip.regs + TITAN_GPIO_ENBL_1;
++
++	writel(readl(gpio >> 5 ? gpio_en1 : gpio_en0) & ~(1 << (gpio & 0x1f)),
++			gpio >> 5 ? gpio_en1 : gpio_en0);
++
++	return 0;
++}
++
++int ar7_gpio_disable(unsigned gpio)
++{
++	return ar7_is_titan() ? ar7_gpio_disable_titan(gpio) :
++				ar7_gpio_disable_ar7(gpio);
++}
++EXPORT_SYMBOL(ar7_gpio_disable);
++
++struct titan_gpio_cfg {
++	u32 reg;
++	u32 shift;
++	u32 func;
++};
++
++static struct titan_gpio_cfg titan_gpio_table[] = {
++	/* reg, start bit, mux value */
++	{4, 24, 1},
++	{4, 26, 1},
++	{4, 28, 1},
++	{4, 30, 1},
++	{5, 6, 1},
++	{5, 8, 1},
++	{5, 10, 1},
++	{5, 12, 1},
++	{7, 14, 3},
++	{7, 16, 3},
++	{7, 18, 3},
++	{7, 20, 3},
++	{7, 22, 3},
++	{7, 26, 3},
++	{7, 28, 3},
++	{7, 30, 3},
++	{8, 0, 3},
++	{8, 2, 3},
++	{8, 4, 3},
++	{8, 10, 3},
++	{8, 14, 3},
++	{8, 16, 3},
++	{8, 18, 3},
++	{8, 20, 3},
++	{9, 8, 3},
++	{9, 10, 3},
++	{9, 12, 3},
++	{9, 14, 3},
++	{9, 18, 3},
++	{9, 20, 3},
++	{9, 24, 3},
++	{9, 26, 3},
++	{9, 28, 3},
++	{9, 30, 3},
++	{10, 0, 3},
++	{10, 2, 3},
++	{10, 8, 3},
++	{10, 10, 3},
++	{10, 12, 3},
++	{10, 14, 3},
++	{13, 12, 3},
++	{13, 14, 3},
++	{13, 16, 3},
++	{13, 18, 3},
++	{13, 24, 3},
++	{13, 26, 3},
++	{13, 28, 3},
++	{13, 30, 3},
++	{14, 2, 3},
++	{14, 6, 3},
++	{14, 8, 3},
++	{14, 12, 3}
++};
++
++static int titan_gpio_pinsel(unsigned gpio)
++{
++	struct titan_gpio_cfg gpio_cfg;
++	u32 mux_status, pin_sel_reg, tmp;
++	void __iomem *pin_sel = (void __iomem *)KSEG1ADDR(AR7_REGS_PINSEL);
++
++	if (gpio >= ARRAY_SIZE(titan_gpio_table))
++		return -EINVAL;
++
++	gpio_cfg = titan_gpio_table[gpio];
++	pin_sel_reg = gpio_cfg.reg - 1;
++
++	mux_status = (readl(pin_sel + pin_sel_reg) >> gpio_cfg.shift) & 0x3;
++
++	/* Check the mux status */
++	if (!((mux_status == 0) || (mux_status == gpio_cfg.func)))
++		return 0;
++
++	/* Set the pin sel value */
++	tmp = readl(pin_sel + pin_sel_reg);
++	tmp |= ((gpio_cfg.func & 0x3) << gpio_cfg.shift);
++	writel(tmp, pin_sel + pin_sel_reg);
++
++	return 0;
++}
++
++/* Perform minimal Titan GPIO configuration */
++static void titan_gpio_init(void)
++{
++	unsigned i;
++
++	for (i = 44; i < 48; i++) {
++		titan_gpio_pinsel(i);
++		ar7_gpio_enable_titan(i);
++		titan_gpio_direction_input(&titan_gpio_chip.chip, i);
++	}
++}
++
++int __init ar7_gpio_init(void)
++{
++	int ret;
++	struct ar7_gpio_chip *gpch;
++	unsigned size;
++
++	if (!ar7_is_titan()) {
++		gpch = &ar7_gpio_chip;
++		size = 0x10;
++	} else {
++		gpch = &titan_gpio_chip;
++		size = 0x1f;
++	}
++
++	gpch->regs = ioremap_nocache(AR7_REGS_GPIO, size);
++	if (!gpch->regs) {
++		printk(KERN_ERR "%s: failed to ioremap regs\n",
++					gpch->chip.label);
++		return -ENOMEM;
++	}
++
++	ret = gpiochip_add(&gpch->chip);
++	if (ret) {
++		printk(KERN_ERR "%s: failed to add gpiochip\n",
++					gpch->chip.label);
++		return ret;
++	}
++	printk(KERN_INFO "%s: registered %d GPIOs\n",
++				gpch->chip.label, gpch->chip.ngpio);
++
++	if (ar7_is_titan())
++		titan_gpio_init();
++
++	return ret;
+ }
+-EXPORT_SYMBOL(gpio_free);
+--- a/arch/mips/ar7/memory.c
++++ b/arch/mips/ar7/memory.c
+@@ -62,8 +62,7 @@ void __init prom_meminit(void)
+ 	unsigned long pages;
+ 
+ 	pages = memsize() >> PAGE_SHIFT;
+-	add_memory_region(PHYS_OFFSET, pages << PAGE_SHIFT,
+-			  BOOT_MEM_RAM);
++	add_memory_region(PHYS_OFFSET, pages << PAGE_SHIFT, BOOT_MEM_RAM);
+ }
+ 
+ void __init prom_free_prom_memory(void)
+--- a/arch/mips/ar7/platform.c
++++ b/arch/mips/ar7/platform.c
+@@ -34,45 +34,50 @@
+ #include <linux/etherdevice.h>
+ #include <linux/phy.h>
+ #include <linux/phy_fixed.h>
++#include <linux/gpio.h>
++#include <linux/clk.h>
+ 
+ #include <asm/addrspace.h>
+ #include <asm/mach-ar7/ar7.h>
+ #include <asm/mach-ar7/gpio.h>
+ #include <asm/mach-ar7/prom.h>
+ 
++/*****************************************************************************
++ * VLYNQ Bus
++ ****************************************************************************/
+ struct plat_vlynq_data {
+ 	struct plat_vlynq_ops ops;
+ 	int gpio_bit;
+ 	int reset_bit;
+ };
+ 
+-
+ static int vlynq_on(struct vlynq_device *dev)
+ {
+-	int result;
++	int ret;
+ 	struct plat_vlynq_data *pdata = dev->dev.platform_data;
+ 
+-	result = gpio_request(pdata->gpio_bit, "vlynq");
+-	if (result)
++	ret = gpio_request(pdata->gpio_bit, "vlynq");
++	if (ret)
+ 		goto out;
+ 
+ 	ar7_device_reset(pdata->reset_bit);
+ 
+-	result = ar7_gpio_disable(pdata->gpio_bit);
+-	if (result)
++	ret = ar7_gpio_disable(pdata->gpio_bit);
++	if (ret)
+ 		goto out_enabled;
+ 
+-	result = ar7_gpio_enable(pdata->gpio_bit);
+-	if (result)
++	ret = ar7_gpio_enable(pdata->gpio_bit);
++	if (ret)
+ 		goto out_enabled;
+ 
+-	result = gpio_direction_output(pdata->gpio_bit, 0);
+-	if (result)
++	ret = gpio_direction_output(pdata->gpio_bit, 0);
++	if (ret)
+ 		goto out_gpio_enabled;
+ 
+ 	msleep(50);
+ 
+ 	gpio_set_value(pdata->gpio_bit, 1);
++
+ 	msleep(50);
+ 
+ 	return 0;
+@@ -83,320 +88,377 @@ out_enabled:
+ 	ar7_device_disable(pdata->reset_bit);
+ 	gpio_free(pdata->gpio_bit);
+ out:
+-	return result;
++	return ret;
+ }
+ 
+ static void vlynq_off(struct vlynq_device *dev)
+ {
+ 	struct plat_vlynq_data *pdata = dev->dev.platform_data;
++
+ 	ar7_gpio_disable(pdata->gpio_bit);
+ 	gpio_free(pdata->gpio_bit);
+ 	ar7_device_disable(pdata->reset_bit);
+ }
+ 
+-static struct resource physmap_flash_resource = {
+-	.name = "mem",
+-	.flags = IORESOURCE_MEM,
+-	.start = 0x10000000,
+-	.end = 0x107fffff,
+-};
+-
+-static struct resource cpmac_low_res[] = {
++static struct resource vlynq_low_res[] = {
+ 	{
+-		.name = "regs",
+-		.flags = IORESOURCE_MEM,
+-		.start = AR7_REGS_MAC0,
+-		.end = AR7_REGS_MAC0 + 0x7ff,
++		.name	= "regs",
++		.flags	= IORESOURCE_MEM,
++		.start	= AR7_REGS_VLYNQ0,
++		.end	= AR7_REGS_VLYNQ0 + 0xff,
+ 	},
+ 	{
+-		.name = "irq",
+-		.flags = IORESOURCE_IRQ,
+-		.start = 27,
+-		.end = 27,
++		.name	= "irq",
++		.flags	= IORESOURCE_IRQ,
++		.start	= 29,
++		.end	= 29,
+ 	},
+-};
+-
+-static struct resource cpmac_high_res[] = {
+ 	{
+-		.name = "regs",
+-		.flags = IORESOURCE_MEM,
+-		.start = AR7_REGS_MAC1,
+-		.end = AR7_REGS_MAC1 + 0x7ff,
++		.name	= "mem",
++		.flags	= IORESOURCE_MEM,
++		.start	= 0x04000000,
++		.end	= 0x04ffffff,
+ 	},
+ 	{
+-		.name = "irq",
+-		.flags = IORESOURCE_IRQ,
+-		.start = 41,
+-		.end = 41,
++		.name	= "devirq",
++		.flags	= IORESOURCE_IRQ,
++		.start	= 80,
++		.end	= 111,
+ 	},
+ };
+ 
+-static struct resource vlynq_low_res[] = {
++static struct resource vlynq_high_res[] = {
+ 	{
+-		.name = "regs",
+-		.flags = IORESOURCE_MEM,
+-		.start = AR7_REGS_VLYNQ0,
+-		.end = AR7_REGS_VLYNQ0 + 0xff,
++		.name	= "regs",
++		.flags	= IORESOURCE_MEM,
++		.start	= AR7_REGS_VLYNQ1,
++		.end	= AR7_REGS_VLYNQ1 + 0xff,
+ 	},
+ 	{
+-		.name = "irq",
+-		.flags = IORESOURCE_IRQ,
+-		.start = 29,
+-		.end = 29,
++		.name	= "irq",
++		.flags	= IORESOURCE_IRQ,
++		.start	= 33,
++		.end	= 33,
+ 	},
+ 	{
+-		.name = "mem",
+-		.flags = IORESOURCE_MEM,
+-		.start = 0x04000000,
+-		.end = 0x04ffffff,
++		.name	= "mem",
++		.flags	= IORESOURCE_MEM,
++		.start	= 0x0c000000,
++		.end	= 0x0cffffff,
+ 	},
+ 	{
+-		.name = "devirq",
+-		.flags = IORESOURCE_IRQ,
+-		.start = 80,
+-		.end = 111,
++		.name	= "devirq",
++		.flags	= IORESOURCE_IRQ,
++		.start	= 112,
++		.end	= 143,
+ 	},
+ };
+ 
+-static struct resource vlynq_high_res[] = {
+-	{
+-		.name = "regs",
+-		.flags = IORESOURCE_MEM,
+-		.start = AR7_REGS_VLYNQ1,
+-		.end = AR7_REGS_VLYNQ1 + 0xff,
+-	},
+-	{
+-		.name = "irq",
+-		.flags = IORESOURCE_IRQ,
+-		.start = 33,
+-		.end = 33,
++static struct plat_vlynq_data vlynq_low_data = {
++	.ops = {
++		.on	= vlynq_on,
++		.off	= vlynq_off,
+ 	},
+-	{
+-		.name = "mem",
+-		.flags = IORESOURCE_MEM,
+-		.start = 0x0c000000,
+-		.end = 0x0cffffff,
++	.reset_bit	= 20,
++	.gpio_bit	= 18,
++};
++
++static struct plat_vlynq_data vlynq_high_data = {
++	.ops = {
++		.on	= vlynq_on,
++		.off	= vlynq_off,
+ 	},
+-	{
+-		.name = "devirq",
+-		.flags = IORESOURCE_IRQ,
+-		.start = 112,
+-		.end = 143,
++	.reset_bit	= 16,
++	.gpio_bit	= 19,
++};
++
++static struct platform_device vlynq_low = {
++	.id		= 0,
++	.name		= "vlynq",
++	.dev = {
++		.platform_data	= &vlynq_low_data,
+ 	},
++	.resource	= vlynq_low_res,
++	.num_resources	= ARRAY_SIZE(vlynq_low_res),
+ };
+ 
+-static struct resource usb_res[] = {
+-	{
+-		.name = "regs",
+-		.flags = IORESOURCE_MEM,
+-		.start = AR7_REGS_USB,
+-		.end = AR7_REGS_USB + 0xff,
+-	},
+-	{
+-		.name = "irq",
+-		.flags = IORESOURCE_IRQ,
+-		.start = 32,
+-		.end = 32,
+-	},
+-	{
+-		.name = "mem",
+-		.flags = IORESOURCE_MEM,
+-		.start = 0x03400000,
+-		.end = 0x034001fff,
++static struct platform_device vlynq_high = {
++	.id		= 1,
++	.name		= "vlynq",
++	.dev = {
++		.platform_data	= &vlynq_high_data,
+ 	},
++	.resource	= vlynq_high_res,
++	.num_resources	= ARRAY_SIZE(vlynq_high_res),
++};
++
++/*****************************************************************************
++ * Flash
++ ****************************************************************************/
++static struct resource physmap_flash_resource = {
++	.name	= "mem",
++	.flags	= IORESOURCE_MEM,
++	.start	= 0x10000000,
++	.end	= 0x107fffff,
+ };
+ 
+ static struct physmap_flash_data physmap_flash_data = {
+-	.width = 2,
++	.width	= 2,
+ };
+ 
+-static struct fixed_phy_status fixed_phy_status __initdata = {
+-	.link = 1,
+-	.speed = 100,
+-	.duplex = 1,
++static struct platform_device physmap_flash = {
++	.name		= "physmap-flash",
++	.dev = {
++		.platform_data	= &physmap_flash_data,
++	},
++	.resource	= &physmap_flash_resource,
++	.num_resources	= 1,
+ };
+ 
+-static struct plat_cpmac_data cpmac_low_data = {
+-	.reset_bit = 17,
+-	.power_bit = 20,
+-	.phy_mask = 0x80000000,
++/*****************************************************************************
++ * Ethernet
++ ****************************************************************************/
++static struct resource cpmac_low_res[] = {
++	{
++		.name	= "regs",
++		.flags	= IORESOURCE_MEM,
++		.start	= AR7_REGS_MAC0,
++		.end	= AR7_REGS_MAC0 + 0x7ff,
++	},
++	{
++		.name	= "irq",
++		.flags	= IORESOURCE_IRQ,
++		.start	= 27,
++		.end 	= 27,
++	},
+ };
+ 
+-static struct plat_cpmac_data cpmac_high_data = {
+-	.reset_bit = 21,
+-	.power_bit = 22,
+-	.phy_mask = 0x7fffffff,
++static struct resource cpmac_high_res[] = {
++	{
++		.name	= "regs",
++		.flags	= IORESOURCE_MEM,
++		.start	= AR7_REGS_MAC1,
++		.end	= AR7_REGS_MAC1 + 0x7ff,
++	},
++	{
++		.name	= "irq",
++		.flags	= IORESOURCE_IRQ,
++		.start	= 41,
++		.end	= 41,
++	},
+ };
+ 
+-static struct plat_vlynq_data vlynq_low_data = {
+-	.ops.on = vlynq_on,
+-	.ops.off = vlynq_off,
+-	.reset_bit = 20,
+-	.gpio_bit = 18,
++static struct fixed_phy_status fixed_phy_status __initdata = {
++	.link		= 1,
++	.speed		= 100,
++	.duplex		= 1,
+ };
+ 
+-static struct plat_vlynq_data vlynq_high_data = {
+-	.ops.on = vlynq_on,
+-	.ops.off = vlynq_off,
+-	.reset_bit = 16,
+-	.gpio_bit = 19,
++static struct plat_cpmac_data cpmac_low_data = {
++	.reset_bit	= 17,
++	.power_bit	= 20,
++	.phy_mask	= 0x80000000,
+ };
+ 
+-static struct platform_device physmap_flash = {
+-	.id = 0,
+-	.name = "physmap-flash",
+-	.dev.platform_data = &physmap_flash_data,
+-	.resource = &physmap_flash_resource,
+-	.num_resources = 1,
++static struct plat_cpmac_data cpmac_high_data = {
++	.reset_bit	= 21,
++	.power_bit	= 22,
++	.phy_mask	= 0x7fffffff,
+ };
+ 
+ static u64 cpmac_dma_mask = DMA_BIT_MASK(32);
++
+ static struct platform_device cpmac_low = {
+-	.id = 0,
+-	.name = "cpmac",
++	.id		= 0,
++	.name		= "cpmac",
+ 	.dev = {
+-		.dma_mask = &cpmac_dma_mask,
+-		.coherent_dma_mask = DMA_BIT_MASK(32),
+-		.platform_data = &cpmac_low_data,
++		.dma_mask		= &cpmac_dma_mask,
++		.coherent_dma_mask	= DMA_BIT_MASK(32),
++		.platform_data		= &cpmac_low_data,
+ 	},
+-	.resource = cpmac_low_res,
+-	.num_resources = ARRAY_SIZE(cpmac_low_res),
++	.resource	= cpmac_low_res,
++	.num_resources	= ARRAY_SIZE(cpmac_low_res),
+ };
+ 
+ static struct platform_device cpmac_high = {
+-	.id = 1,
+-	.name = "cpmac",
++	.id		= 1,
++	.name		= "cpmac",
+ 	.dev = {
+-		.dma_mask = &cpmac_dma_mask,
+-		.coherent_dma_mask = DMA_BIT_MASK(32),
+-		.platform_data = &cpmac_high_data,
++		.dma_mask		= &cpmac_dma_mask,
++		.coherent_dma_mask	= DMA_BIT_MASK(32),
++		.platform_data		= &cpmac_high_data,
+ 	},
+-	.resource = cpmac_high_res,
+-	.num_resources = ARRAY_SIZE(cpmac_high_res),
++	.resource	= cpmac_high_res,
++	.num_resources	= ARRAY_SIZE(cpmac_high_res),
+ };
+ 
+-static struct platform_device vlynq_low = {
+-	.id = 0,
+-	.name = "vlynq",
+-	.dev.platform_data = &vlynq_low_data,
+-	.resource = vlynq_low_res,
+-	.num_resources = ARRAY_SIZE(vlynq_low_res),
+-};
++static void __init cpmac_get_mac(int instance, unsigned char *dev_addr)
++{
++	char name[5], *mac;
+ 
+-static struct platform_device vlynq_high = {
+-	.id = 1,
+-	.name = "vlynq",
+-	.dev.platform_data = &vlynq_high_data,
+-	.resource = vlynq_high_res,
+-	.num_resources = ARRAY_SIZE(vlynq_high_res),
++	sprintf(name, "mac%c", 'a' + instance);
++	mac = prom_getenv(name);
++	if (!mac && instance) {
++		sprintf(name, "mac%c", 'a');
++		mac = prom_getenv(name);
++	}
++
++	if (mac) {
++		if (sscanf(mac, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
++					&dev_addr[0], &dev_addr[1],
++					&dev_addr[2], &dev_addr[3],
++					&dev_addr[4], &dev_addr[5]) != 6) {
++			pr_warning("cannot parse mac address, "
++					"using random address\n");
++			random_ether_addr(dev_addr);
++		}
++	} else
++		random_ether_addr(dev_addr);
++}
++
++/*****************************************************************************
++ * USB
++ ****************************************************************************/
++static struct resource usb_res[] = {
++	{
++		.name	= "regs",
++		.flags	= IORESOURCE_MEM,
++		.start	= AR7_REGS_USB,
++		.end	= AR7_REGS_USB + 0xff,
++	},
++	{
++		.name	= "irq",
++		.flags	= IORESOURCE_IRQ,
++		.start	= 32,
++		.end	= 32,
++	},
++	{
++		.name	= "mem",
++		.flags	= IORESOURCE_MEM,
++		.start	= 0x03400000,
++		.end	= 0x03401fff,
++	},
+ };
+ 
++static struct platform_device ar7_udc = {
++	.name		= "ar7_udc",
++	.resource	= usb_res,
++	.num_resources	= ARRAY_SIZE(usb_res),
++};
+ 
++/*****************************************************************************
++ * LEDs
++ ****************************************************************************/
+ static struct gpio_led default_leds[] = {
+ 	{
+-		.name = "status",
+-		.gpio = 8,
+-		.active_low = 1,
++		.name			= "status",
++		.gpio			= 8,
++		.active_low		= 1,
+ 	},
+ };
+ 
++static struct gpio_led titan_leds[] = {
++	{ .name = "status", .gpio = 8, .active_low = 1, },
++	{ .name = "wifi", .gpio = 13, .active_low = 1, },
++};
++
+ static struct gpio_led dsl502t_leds[] = {
+ 	{
+-		.name = "status",
+-		.gpio = 9,
+-		.active_low = 1,
++		.name			= "status",
++		.gpio			= 9,
++		.active_low		= 1,
+ 	},
+ 	{
+-		.name = "ethernet",
+-		.gpio = 7,
+-		.active_low = 1,
++		.name			= "ethernet",
++		.gpio			= 7,
++		.active_low		= 1,
+ 	},
+ 	{
+-		.name = "usb",
+-		.gpio = 12,
+-		.active_low = 1,
++		.name			= "usb",
++		.gpio			= 12,
++		.active_low		= 1,
+ 	},
+ };
+ 
+ static struct gpio_led dg834g_leds[] = {
+ 	{
+-		.name = "ppp",
+-		.gpio = 6,
+-		.active_low = 1,
++		.name			= "ppp",
++		.gpio			= 6,
++		.active_low		= 1,
+ 	},
+ 	{
+-		.name = "status",
+-		.gpio = 7,
+-		.active_low = 1,
++		.name			= "status",
++		.gpio			= 7,
++		.active_low		= 1,
+ 	},
+ 	{
+-		.name = "adsl",
+-		.gpio = 8,
+-		.active_low = 1,
++		.name			= "adsl",
++		.gpio			= 8,
++		.active_low		= 1,
+ 	},
+ 	{
+-		.name = "wifi",
+-		.gpio = 12,
+-		.active_low = 1,
++		.name			= "wifi",
++		.gpio			= 12,
++		.active_low		= 1,
+ 	},
+ 	{
+-		.name = "power",
+-		.gpio = 14,
+-		.active_low = 1,
+-		.default_trigger = "default-on",
++		.name			= "power",
++		.gpio			= 14,
++		.active_low		= 1,
++		.default_trigger	= "default-on",
+ 	},
+ };
+ 
+ static struct gpio_led fb_sl_leds[] = {
+ 	{
+-		.name = "1",
+-		.gpio = 7,
++		.name			= "1",
++		.gpio			= 7,
+ 	},
+ 	{
+-		.name = "2",
+-		.gpio = 13,
+-		.active_low = 1,
++		.name			= "2",
++		.gpio			= 13,
++		.active_low		= 1,
+ 	},
+ 	{
+-		.name = "3",
+-		.gpio = 10,
+-		.active_low = 1,
++		.name			= "3",
++		.gpio			= 10,
++		.active_low		= 1,
+ 	},
+ 	{
+-		.name = "4",
+-		.gpio = 12,
+-		.active_low = 1,
++		.name			= "4",
++		.gpio			= 12,
++		.active_low		= 1,
+ 	},
+ 	{
+-		.name = "5",
+-		.gpio = 9,
+-		.active_low = 1,
++		.name			= "5",
++		.gpio			= 9,
++		.active_low		= 1,
+ 	},
+ };
+ 
+ static struct gpio_led fb_fon_leds[] = {
+ 	{
+-		.name = "1",
+-		.gpio = 8,
++		.name			= "1",
++		.gpio			= 8,
+ 	},
+ 	{
+-		.name = "2",
+-		.gpio = 3,
+-		.active_low = 1,
++		.name			= "2",
++		.gpio			= 3,
++		.active_low		= 1,
+ 	},
+ 	{
+-		.name = "3",
+-		.gpio = 5,
++		.name			= "3",
++		.gpio			= 5,
+ 	},
+ 	{
+-		.name = "4",
+-		.gpio = 4,
+-		.active_low = 1,
++		.name			= "4",
++		.gpio			= 4,
++		.active_low		= 1,
+ 	},
+ 	{
+-		.name = "5",
+-		.gpio = 11,
+-		.active_low = 1,
++		.name			= "5",
++		.gpio			= 11,
++		.active_low		= 1,
+ 	},
+ };
+ 
+@@ -404,69 +466,11 @@ static struct gpio_led_platform_data ar7
+ 
+ static struct platform_device ar7_gpio_leds = {
+ 	.name = "leds-gpio",
+-	.id = -1,
+ 	.dev = {
+ 		.platform_data = &ar7_led_data,
+ 	}
+ };
+ 
+-static struct platform_device ar7_udc = {
+-	.id = -1,
+-	.name = "ar7_udc",
+-	.resource = usb_res,
+-	.num_resources = ARRAY_SIZE(usb_res),
+-};
+-
+-static struct resource ar7_wdt_res = {
+-	.name = "regs",
+-	.start = -1, /* Filled at runtime */
+-	.end = -1, /* Filled at runtime */
+-	.flags = IORESOURCE_MEM,
+-};
+-
+-static struct platform_device ar7_wdt = {
+-	.id = -1,
+-	.name  = "ar7_wdt",
+-	.resource = &ar7_wdt_res,
+-	.num_resources = 1,
+-};
+-
+-static inline unsigned char char2hex(char h)
+-{
+-	switch (h) {
+-	case '0': case '1': case '2': case '3': case '4':
+-	case '5': case '6': case '7': case '8': case '9':
+-		return h - '0';
+-	case 'A': case 'B': case 'C': case 'D': case 'E': case 'F':
+-		return h - 'A' + 10;
+-	case 'a': case 'b': case 'c': case 'd': case 'e': case 'f':
+-		return h - 'a' + 10;
+-	default:
+-		return 0;
+-	}
+-}
+-
+-static void cpmac_get_mac(int instance, unsigned char *dev_addr)
+-{
+-	int i;
+-	char name[5], default_mac[ETH_ALEN], *mac;
+-
+-	mac = NULL;
+-	sprintf(name, "mac%c", 'a' + instance);
+-	mac = prom_getenv(name);
+-	if (!mac) {
+-		sprintf(name, "mac%c", 'a');
+-		mac = prom_getenv(name);
+-	}
+-	if (!mac) {
+-		random_ether_addr(default_mac);
+-		mac = default_mac;
+-	}
+-	for (i = 0; i < 6; i++)
+-		dev_addr[i] = (char2hex(mac[i * 3]) << 4) +
+-			char2hex(mac[i * 3 + 1]);
+-}
+-
+ static void __init detect_leds(void)
+ {
+ 	char *prid, *usb_prod;
+@@ -496,114 +500,195 @@ static void __init detect_leds(void)
+ 	} else if (strstr(prid, "DG834")) {
+ 		ar7_led_data.num_leds = ARRAY_SIZE(dg834g_leds);
+ 		ar7_led_data.leds = dg834g_leds;
++	} else if (strstr(prid, "CYWM") || strstr(prid, "CYWL")) {
++		ar7_led_data.num_leds = ARRAY_SIZE(titan_leds);
++		ar7_led_data.leds = titan_leds;
+ 	}
+ }
+ 
+-static int __init ar7_register_devices(void)
++/*****************************************************************************
++ * Watchdog
++ ****************************************************************************/
++static struct resource ar7_wdt_res = {
++	.name		= "regs",
++	.flags		= IORESOURCE_MEM,
++	.start		= -1,	/* Filled at runtime */
++	.end		= -1,	/* Filled at runtime */
++};
++
++static struct platform_device ar7_wdt = {
++	.name		= "ar7_wdt",
++	.resource	= &ar7_wdt_res,
++	.num_resources	= 1,
++};
++
++/*****************************************************************************
++ * Init
++ ****************************************************************************/
++static int __init ar7_register_uarts(void)
+ {
+-	u16 chip_id;
+-	int res;
+-	u32 *bootcr, val;
+ #ifdef CONFIG_SERIAL_8250
+-	static struct uart_port uart_port[2];
++	static struct uart_port uart_port __initdata;
++	struct clk *bus_clk;
++	int res;
++
++	memset(&uart_port, 0, sizeof(struct uart_port));
+ 
+-	memset(uart_port, 0, sizeof(struct uart_port) * 2);
++	bus_clk = clk_get(NULL, "bus");
++	if (IS_ERR(bus_clk))
++		panic("unable to get bus clk\n");
++
++	uart_port.type		= PORT_AR7;
++	uart_port.uartclk	= clk_get_rate(bus_clk) / 2;
++	uart_port.iotype	= UPIO_MEM32;
++	uart_port.regshift	= 2;
++
++	uart_port.line		= 0;
++	uart_port.irq		= AR7_IRQ_UART0;
++	uart_port.mapbase	= AR7_REGS_UART0;
++	uart_port.membase	= ioremap(uart_port.mapbase, 256);
+ 
+-	uart_port[0].type = PORT_16550A;
+-	uart_port[0].line = 0;
+-	uart_port[0].irq = AR7_IRQ_UART0;
+-	uart_port[0].uartclk = ar7_bus_freq() / 2;
+-	uart_port[0].iotype = UPIO_MEM32;
+-	uart_port[0].mapbase = AR7_REGS_UART0;
+-	uart_port[0].membase = ioremap(uart_port[0].mapbase, 256);
+-	uart_port[0].regshift = 2;
+-	res = early_serial_setup(&uart_port[0]);
++	res = early_serial_setup(&uart_port);
+ 	if (res)
+ 		return res;
+ 
+-
+ 	/* Only TNETD73xx have a second serial port */
+ 	if (ar7_has_second_uart()) {
+-		uart_port[1].type = PORT_16550A;
+-		uart_port[1].line = 1;
+-		uart_port[1].irq = AR7_IRQ_UART1;
+-		uart_port[1].uartclk = ar7_bus_freq() / 2;
+-		uart_port[1].iotype = UPIO_MEM32;
+-		uart_port[1].mapbase = UR8_REGS_UART1;
+-		uart_port[1].membase = ioremap(uart_port[1].mapbase, 256);
+-		uart_port[1].regshift = 2;
+-		res = early_serial_setup(&uart_port[1]);
++		uart_port.line		= 1;
++		uart_port.irq		= AR7_IRQ_UART1;
++		uart_port.mapbase	= UR8_REGS_UART1;
++		uart_port.membase	= ioremap(uart_port.mapbase, 256);
++
++		res = early_serial_setup(&uart_port);
+ 		if (res)
+ 			return res;
+ 	}
+-#endif /* CONFIG_SERIAL_8250 */
++#endif
++
++	return 0;
++}
++
++static void __init titan_fixup_devices(void)
++{
++	/* Set vlynq0 data */
++	vlynq_low_data.reset_bit = 15;
++	vlynq_low_data.gpio_bit = 14;
++
++	/* Set vlynq1 data */
++	vlynq_high_data.reset_bit = 16;
++	vlynq_high_data.gpio_bit = 7;
++
++	/* Set vlynq0 resources */
++	vlynq_low_res[0].start = TITAN_REGS_VLYNQ0;
++	vlynq_low_res[0].end = TITAN_REGS_VLYNQ0 + 0xff;
++	vlynq_low_res[1].start = 33;
++	vlynq_low_res[1].end = 33;
++	vlynq_low_res[2].start = 0x0c000000;
++	vlynq_low_res[2].end = 0x0fffffff;
++	vlynq_low_res[3].start = 80;
++	vlynq_low_res[3].end = 111;
++
++	/* Set vlynq1 resources */
++	vlynq_high_res[0].start = TITAN_REGS_VLYNQ1;
++	vlynq_high_res[0].end = TITAN_REGS_VLYNQ1 + 0xff;
++	vlynq_high_res[1].start = 34;
++	vlynq_high_res[1].end = 34;
++	vlynq_high_res[2].start = 0x40000000;
++	vlynq_high_res[2].end = 0x43ffffff;
++	vlynq_high_res[3].start = 112;
++	vlynq_high_res[3].end = 143;
++
++	/* Set cpmac0 data */
++	cpmac_low_data.phy_mask = 0x40000000;
++
++	/* Set cpmac1 data */
++	cpmac_high_data.phy_mask = 0x80000000;
++
++	/* Set cpmac0 resources */
++	cpmac_low_res[0].start = TITAN_REGS_MAC0;
++	cpmac_low_res[0].end = TITAN_REGS_MAC0 + 0x7ff;
++
++	/* Set cpmac1 resources */
++	cpmac_high_res[0].start = TITAN_REGS_MAC1;
++	cpmac_high_res[0].end = TITAN_REGS_MAC1 + 0x7ff;
++}
++
++static int __init ar7_register_devices(void)
++{
++	void __iomem *bootcr;
++	u32 val;
++	int res;
++
++	res = ar7_register_uarts();
++	if (res)
++		pr_err("unable to setup uart(s): %d\n", res);
++
+ 	res = platform_device_register(&physmap_flash);
+ 	if (res)
+-		return res;
++		pr_warning("unable to register physmap-flash: %d\n", res);
++
++	if (ar7_is_titan())
++		titan_fixup_devices();
+ 
+ 	ar7_device_disable(vlynq_low_data.reset_bit);
+ 	res = platform_device_register(&vlynq_low);
+ 	if (res)
+-		return res;
++		pr_warning("unable to register vlynq-low: %d\n", res);
+ 
+ 	if (ar7_has_high_vlynq()) {
+ 		ar7_device_disable(vlynq_high_data.reset_bit);
+ 		res = platform_device_register(&vlynq_high);
+ 		if (res)
+-			return res;
++			pr_warning("unable to register vlynq-high: %d\n", res);
+ 	}
+ 
+ 	if (ar7_has_high_cpmac()) {
+ 		res = fixed_phy_add(PHY_POLL, cpmac_high.id, &fixed_phy_status);
+-		if (res && res != -ENODEV)
+-			return res;
+-		cpmac_get_mac(1, cpmac_high_data.dev_addr);
+-		res = platform_device_register(&cpmac_high);
+-		if (res)
+-			return res;
+-	} else {
++		if (!res) {
++			cpmac_get_mac(1, cpmac_high_data.dev_addr);
++
++			res = platform_device_register(&cpmac_high);
++			if (res)
++				pr_warning("unable to register cpmac-high: %d\n", res);
++		} else
++			pr_warning("unable to add cpmac-high phy: %d\n", res);
++	} else
+ 		cpmac_low_data.phy_mask = 0xffffffff;
+-	}
+ 
+ 	res = fixed_phy_add(PHY_POLL, cpmac_low.id, &fixed_phy_status);
+-	if (res && res != -ENODEV)
+-		return res;
+-
+-	cpmac_get_mac(0, cpmac_low_data.dev_addr);
+-	res = platform_device_register(&cpmac_low);
+-	if (res)
+-		return res;
++	if (!res) {
++		cpmac_get_mac(0, cpmac_low_data.dev_addr);
++		res = platform_device_register(&cpmac_low);
++		if (res)
++			pr_warning("unable to register cpmac-low: %d\n", res);
++	} else
++		pr_warning("unable to add cpmac-low phy: %d\n", res);
+ 
+ 	detect_leds();
+ 	res = platform_device_register(&ar7_gpio_leds);
+ 	if (res)
+-		return res;
++		pr_warning("unable to register leds: %d\n", res);
+ 
+ 	res = platform_device_register(&ar7_udc);
++	if (res)
++		pr_warning("unable to register usb slave: %d\n", res);
+ 
+-	chip_id = ar7_chip_id();
+-	switch (chip_id) {
+-	case AR7_CHIP_7100:
+-	case AR7_CHIP_7200:
+-		ar7_wdt_res.start = AR7_REGS_WDT;
+-		break;
+-	case AR7_CHIP_7300:
+-		ar7_wdt_res.start = UR8_REGS_WDT;
+-		break;
+-	default:
+-		break;
+-	}
+-
+-	ar7_wdt_res.end = ar7_wdt_res.start + 0x20;
+-
+-	bootcr = (u32 *)ioremap_nocache(AR7_REGS_DCL, 4);
+-	val = *bootcr;
++	/* Register watchdog only if enabled in hardware */
++	bootcr = ioremap_nocache(AR7_REGS_DCL, 4);
++	val = readl(bootcr);
+ 	iounmap(bootcr);
++	if (val & AR7_WDT_HW_ENA) {
++		if (ar7_has_high_vlynq())
++			ar7_wdt_res.start = UR8_REGS_WDT;
++		else
++			ar7_wdt_res.start = AR7_REGS_WDT;
+ 
+-	/* Register watchdog only if enabled in hardware */
+-	if (val & AR7_WDT_HW_ENA)
++		ar7_wdt_res.end = ar7_wdt_res.start + 0x20;
+ 		res = platform_device_register(&ar7_wdt);
++		if (res)
++			pr_warning("unable to register watchdog: %d\n", res);
++	}
+ 
+-	return res;
++	return 0;
+ }
+-arch_initcall(ar7_register_devices);
++device_initcall(ar7_register_devices);
+--- a/arch/mips/ar7/prom.c
++++ b/arch/mips/ar7/prom.c
+@@ -32,8 +32,8 @@
+ #define MAX_ENTRY 80
+ 
+ struct env_var {
+-	char *name;
+-	char *value;
++	char	*name;
++	char	*value;
+ };
+ 
+ static struct env_var adam2_env[MAX_ENTRY];
+@@ -41,6 +41,7 @@ static struct env_var adam2_env[MAX_ENTR
+ char *prom_getenv(const char *name)
+ {
+ 	int i;
++
+ 	for (i = 0; (i < MAX_ENTRY) && adam2_env[i].name; i++)
+ 		if (!strcmp(name, adam2_env[i].name))
+ 			return adam2_env[i].value;
+@@ -49,65 +50,50 @@ char *prom_getenv(const char *name)
+ }
+ EXPORT_SYMBOL(prom_getenv);
+ 
+-char * __init prom_getcmdline(void)
+-{
+-	return &(arcs_cmdline[0]);
+-}
+-
+ static void  __init ar7_init_cmdline(int argc, char *argv[])
+ {
+-	char *cp;
+-	int actr;
+-
+-	actr = 1; /* Always ignore argv[0] */
++	int i;
+ 
+-	cp = &(arcs_cmdline[0]);
+-	while (actr < argc) {
+-		strcpy(cp, argv[actr]);
+-		cp += strlen(argv[actr]);
+-		*cp++ = ' ';
+-		actr++;
+-	}
+-	if (cp != &(arcs_cmdline[0])) {
+-		/* get rid of trailing space */
+-		--cp;
+-		*cp = '\0';
++	for (i = 1; i < argc; i++) {
++		strlcat(arcs_cmdline, argv[i], COMMAND_LINE_SIZE);
++		if (i < (argc - 1))
++			strlcat(arcs_cmdline, " ", COMMAND_LINE_SIZE);
+ 	}
+ }
+ 
+ struct psbl_rec {
+-	u32 psbl_size;
+-	u32 env_base;
+-	u32 env_size;
+-	u32 ffs_base;
+-	u32 ffs_size;
++	u32	psbl_size;
++	u32	env_base;
++	u32	env_size;
++	u32	ffs_base;
++	u32	ffs_size;
+ };
+ 
+ static __initdata char psp_env_version[] = "TIENV0.8";
+ 
+ struct psp_env_chunk {
+-	u8 num;
+-	u8 ctrl;
+-	u16 csum;
+-	u8 len;
+-	char data[11];
++	u8	num;
++	u8	ctrl;
++	u16	csum;
++	u8	len;
++	char	data[11];
+ } __attribute__ ((packed));
+ 
+ struct psp_var_map_entry {
+-	u8 num;
+-	char *value;
++	u8	num;
++	char	*value;
+ };
+ 
+ static struct psp_var_map_entry psp_var_map[] = {
+-	{ 1, "cpufrequency" },
+-	{ 2, "memsize" },
+-	{ 3, "flashsize" },
+-	{ 4, "modetty0" },
+-	{ 5, "modetty1" },
+-	{ 8, "maca" },
+-	{ 9, "macb" },
+-	{ 28, "sysfrequency" },
+-	{ 38, "mipsfrequency" },
++	{  1,	"cpufrequency" },
++	{  2,	"memsize" },
++	{  3,	"flashsize" },
++	{  4,	"modetty0" },
++	{  5,	"modetty1" },
++	{  8,	"maca" },
++	{  9,	"macb" },
++	{ 28,	"sysfrequency" },
++	{ 38,	"mipsfrequency" },
+ };
+ 
+ /*
+@@ -154,6 +140,7 @@ static char * __init lookup_psp_var_map(
+ static void __init add_adam2_var(char *name, char *value)
+ {
+ 	int i;
++
+ 	for (i = 0; i < MAX_ENTRY; i++) {
+ 		if (!adam2_env[i].name) {
+ 			adam2_env[i].name = name;
+@@ -216,16 +203,8 @@ static void __init console_config(void)
+ 	char parity = '\0', bits = '\0', flow = '\0';
+ 	char *s, *p;
+ 
+-	if (strstr(prom_getcmdline(), "console="))
+-		return;
+-
+-#ifdef CONFIG_KGDB
+-	if (!strstr(prom_getcmdline(), "nokgdb")) {
+-		strcat(prom_getcmdline(), " console=kgdb");
+-		kgdb_enabled = 1;
++	if (strstr(arcs_cmdline, "console="))
+ 		return;
+-	}
+-#endif
+ 
+ 	s = prom_getenv("modetty0");
+ 	if (s) {
+@@ -258,7 +237,7 @@ static void __init console_config(void)
+ 	else
+ 		sprintf(console_string, " console=ttyS0,%d%c%c", baud, parity,
+ 			bits);
+-	strcat(prom_getcmdline(), console_string);
++	strlcat(arcs_cmdline, console_string, COMMAND_LINE_SIZE);
+ #endif
+ }
+ 
+@@ -267,6 +246,8 @@ void __init prom_init(void)
+ 	ar7_init_cmdline(fw_arg0, (char **)fw_arg1);
+ 	ar7_init_env((struct env_var *)fw_arg2);
+ 	console_config();
++
++	ar7_gpio_init();
+ }
+ 
+ #define PORT(offset) (KSEG1ADDR(AR7_REGS_UART0 + (offset * 4)))
+@@ -280,13 +261,6 @@ static inline void serial_out(int offset
+ 	writel(value, (void *)PORT(offset));
+ }
+ 
+-char prom_getchar(void)
+-{
+-	while (!(serial_in(UART_LSR) & UART_LSR_DR))
+-		;
+-	return serial_in(UART_RX);
+-}
+-
+ int prom_putchar(char c)
+ {
+ 	while ((serial_in(UART_LSR) & UART_LSR_TEMT) == 0)
+@@ -294,4 +268,3 @@ int prom_putchar(char c)
+ 	serial_out(UART_TX, c);
+ 	return 1;
+ }
+-
+--- a/arch/mips/ar7/setup.c
++++ b/arch/mips/ar7/setup.c
+@@ -23,11 +23,12 @@
+ #include <asm/reboot.h>
+ #include <asm/mach-ar7/ar7.h>
+ #include <asm/mach-ar7/prom.h>
++#include <asm/mach-ar7/gpio.h>
+ 
+ static void ar7_machine_restart(char *command)
+ {
+-	u32 *softres_reg = ioremap(AR7_REGS_RESET +
+-					  AR7_RESET_SOFTWARE, 1);
++	u32 *softres_reg = ioremap(AR7_REGS_RESET + AR7_RESET_SOFTWARE, 1);
++
+ 	writel(1, softres_reg);
+ }
+ 
+@@ -41,6 +42,7 @@ static void ar7_machine_power_off(void)
+ {
+ 	u32 *power_reg = (u32 *)ioremap(AR7_REGS_POWER, 1);
+ 	u32 power_state = readl(power_reg) | (3 << 30);
++
+ 	writel(power_state, power_reg);
+ 	ar7_machine_halt();
+ }
+@@ -48,15 +50,28 @@ static void ar7_machine_power_off(void)
+ const char *get_system_type(void)
+ {
+ 	u16 chip_id = ar7_chip_id();
++	u16 titan_variant_id = titan_chip_id();
++
+ 	switch (chip_id) {
+-	case AR7_CHIP_7300:
+-		return "TI AR7 (TNETD7300)";
+ 	case AR7_CHIP_7100:
+ 		return "TI AR7 (TNETD7100)";
+ 	case AR7_CHIP_7200:
+ 		return "TI AR7 (TNETD7200)";
++	case AR7_CHIP_7300:
++		return "TI AR7 (TNETD7300)";
++	case AR7_CHIP_TITAN:
++		switch (titan_variant_id) {
++		case TITAN_CHIP_1050:
++			return "TI AR7 (TNETV1050)";
++		case TITAN_CHIP_1055:
++			return "TI AR7 (TNETV1055)";
++		case TITAN_CHIP_1056:
++			return "TI AR7 (TNETV1056)";
++		case TITAN_CHIP_1060:
++			return "TI AR7 (TNETV1060)";
++		}
+ 	default:
+-		return "TI AR7 (Unknown)";
++		return "TI AR7 (unknown)";
+ 	}
+ }
+ 
+@@ -70,7 +85,6 @@ console_initcall(ar7_init_console);
+  * Initializes basic routines and structures pointers, memory size (as
+  * given by the bios and saves the command line.
+  */
+-
+ void __init plat_mem_setup(void)
+ {
+ 	unsigned long io_base;
+@@ -88,6 +102,5 @@ void __init plat_mem_setup(void)
+ 	prom_meminit();
+ 
+ 	printk(KERN_INFO "%s, ID: 0x%04x, Revision: 0x%02x\n",
+-					get_system_type(),
+-		ar7_chip_id(), ar7_chip_rev());
++			get_system_type(), ar7_chip_id(), ar7_chip_rev());
+ }
+--- a/arch/mips/ar7/time.c
++++ b/arch/mips/ar7/time.c
+@@ -20,11 +20,24 @@
+ 
+ #include <linux/init.h>
+ #include <linux/time.h>
++#include <linux/err.h>
++#include <linux/clk.h>
+ 
+ #include <asm/time.h>
+ #include <asm/mach-ar7/ar7.h>
+ 
+ void __init plat_time_init(void)
+ {
+-	mips_hpt_frequency = ar7_cpu_freq() / 2;
++	struct clk *cpu_clk;
++
++	/* Initialize ar7 clocks so the CPU clock frequency is correct */
++	ar7_init_clocks();
++
++	cpu_clk = clk_get(NULL, "cpu");
++	if (IS_ERR(cpu_clk)) {
++		printk(KERN_ERR "unable to get cpu clock\n");
++		return;
++	}
++
++	mips_hpt_frequency = clk_get_rate(cpu_clk) / 2;
+ }
+--- a/arch/mips/include/asm/mach-ar7/ar7.h
++++ b/arch/mips/include/asm/mach-ar7/ar7.h
+@@ -39,6 +39,7 @@
+ #define AR7_REGS_UART0	(AR7_REGS_BASE + 0x0e00)
+ #define AR7_REGS_USB	(AR7_REGS_BASE + 0x1200)
+ #define AR7_REGS_RESET	(AR7_REGS_BASE + 0x1600)
++#define AR7_REGS_PINSEL (AR7_REGS_BASE + 0x160C)
+ #define AR7_REGS_VLYNQ0	(AR7_REGS_BASE + 0x1800)
+ #define AR7_REGS_DCL	(AR7_REGS_BASE + 0x1a00)
+ #define AR7_REGS_VLYNQ1	(AR7_REGS_BASE + 0x1c00)
+@@ -50,7 +51,15 @@
+ #define UR8_REGS_WDT	(AR7_REGS_BASE + 0x0b00)
+ #define UR8_REGS_UART1	(AR7_REGS_BASE + 0x0f00)
+ 
+-#define AR7_RESET_PEREPHERIAL	0x0
++/* Titan registers */
++#define TITAN_REGS_ESWITCH_BASE	(0x08640000)
++#define TITAN_REGS_MAC0		(TITAN_REGS_ESWITCH_BASE)
++#define TITAN_REGS_MAC1		(TITAN_REGS_ESWITCH_BASE + 0x0800)
++#define TITAN_REGS_MDIO		(TITAN_REGS_ESWITCH_BASE + 0x02000)
++#define TITAN_REGS_VLYNQ0	(AR7_REGS_BASE + 0x1c00)
++#define TITAN_REGS_VLYNQ1	(AR7_REGS_BASE + 0x1300)
++
++#define AR7_RESET_PERIPHERAL	0x0
+ #define AR7_RESET_SOFTWARE	0x4
+ #define AR7_RESET_STATUS	0x8
+ 
+@@ -59,15 +68,30 @@
+ #define AR7_RESET_BIT_MDIO	22
+ #define AR7_RESET_BIT_EPHY	26
+ 
++#define TITAN_RESET_BIT_EPHY1	28
++
+ /* GPIO control registers */
+ #define AR7_GPIO_INPUT	0x0
+ #define AR7_GPIO_OUTPUT	0x4
+ #define AR7_GPIO_DIR	0x8
+ #define AR7_GPIO_ENABLE	0xc
++#define TITAN_GPIO_INPUT_0	0x0
++#define TITAN_GPIO_INPUT_1	0x4
++#define TITAN_GPIO_OUTPUT_0	0x8
++#define TITAN_GPIO_OUTPUT_1	0xc
++#define TITAN_GPIO_DIR_0	0x10
++#define TITAN_GPIO_DIR_1	0x14
++#define TITAN_GPIO_ENBL_0	0x18
++#define TITAN_GPIO_ENBL_1	0x1c
+ 
+ #define AR7_CHIP_7100	0x18
+ #define AR7_CHIP_7200	0x2b
+ #define AR7_CHIP_7300	0x05
++#define AR7_CHIP_TITAN	0x07
++#define TITAN_CHIP_1050	0x0f
++#define TITAN_CHIP_1055	0x0e
++#define TITAN_CHIP_1056	0x0d
++#define TITAN_CHIP_1060	0x07
+ 
+ /* Interrupts */
+ #define AR7_IRQ_UART0	15
+@@ -95,36 +119,34 @@ struct plat_dsl_data {
+ 
+ extern int ar7_cpu_clock, ar7_bus_clock, ar7_dsp_clock;
+ 
+-static inline u16 ar7_chip_id(void)
+-{
+-	return readl((void *)KSEG1ADDR(AR7_REGS_GPIO + 0x14)) & 0xffff;
+-}
+-
+-static inline u8 ar7_chip_rev(void)
++static inline int ar7_is_titan(void)
+ {
+-	return (readl((void *)KSEG1ADDR(AR7_REGS_GPIO + 0x14)) >> 16) & 0xff;
++	return (readl((void *)KSEG1ADDR(AR7_REGS_GPIO + 0x24)) & 0xffff) ==
++		AR7_CHIP_TITAN;
+ }
+ 
+-static inline int ar7_cpu_freq(void)
++static inline u16 ar7_chip_id(void)
+ {
+-	return ar7_cpu_clock;
++	return ar7_is_titan() ? AR7_CHIP_TITAN : (readl((void *)
++		KSEG1ADDR(AR7_REGS_GPIO + 0x14)) & 0xffff);
+ }
+ 
+-static inline int ar7_bus_freq(void)
++static inline u16 titan_chip_id(void)
+ {
+-	return ar7_bus_clock;
++	unsigned int val = readl((void *)KSEG1ADDR(AR7_REGS_GPIO +
++						TITAN_GPIO_INPUT_1));
++	return ((val >> 12) & 0x0f);
+ }
+ 
+-static inline int ar7_vbus_freq(void)
++static inline u8 ar7_chip_rev(void)
+ {
+-	return ar7_bus_clock / 2;
++	return (readl((void *)KSEG1ADDR(AR7_REGS_GPIO + (ar7_is_titan() ? 0x24 :
++		0x14))) >> 16) & 0xff;
+ }
+-#define ar7_cpmac_freq ar7_vbus_freq
+ 
+-static inline int ar7_dsp_freq(void)
+-{
+-	return ar7_dsp_clock;
+-}
++struct clk {
++	unsigned int	rate;
++};
+ 
+ static inline int ar7_has_high_cpmac(void)
+ {
+@@ -145,7 +167,7 @@ static inline int ar7_has_high_cpmac(voi
+ static inline void ar7_device_enable(u32 bit)
+ {
+ 	void *reset_reg =
+-		(void *)KSEG1ADDR(AR7_REGS_RESET + AR7_RESET_PEREPHERIAL);
++		(void *)KSEG1ADDR(AR7_REGS_RESET + AR7_RESET_PERIPHERAL);
+ 	writel(readl(reset_reg) | (1 << bit), reset_reg);
+ 	msleep(20);
+ }
+@@ -153,7 +175,7 @@ static inline void ar7_device_enable(u32
+ static inline void ar7_device_disable(u32 bit)
+ {
+ 	void *reset_reg =
+-		(void *)KSEG1ADDR(AR7_REGS_RESET + AR7_RESET_PEREPHERIAL);
++		(void *)KSEG1ADDR(AR7_REGS_RESET + AR7_RESET_PERIPHERAL);
+ 	writel(readl(reset_reg) & ~(1 << bit), reset_reg);
+ 	msleep(20);
+ }
+@@ -178,4 +200,7 @@ static inline void ar7_device_off(u32 bi
+ 	msleep(20);
+ }
+ 
++int __init ar7_gpio_init(void);
++void __init ar7_init_clocks(void);
++
+ #endif /* __AR7_H__ */
+--- a/arch/mips/include/asm/mach-ar7/gpio.h
++++ b/arch/mips/include/asm/mach-ar7/gpio.h
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (C) 2007 Florian Fainelli <florian@openwrt.org>
++ * Copyright (C) 2007-2009 Florian Fainelli <florian@openwrt.org>
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
+@@ -22,88 +22,19 @@
+ #include <asm/mach-ar7/ar7.h>
+ 
+ #define AR7_GPIO_MAX 32
++#define TITAN_GPIO_MAX	51
++#define NR_BUILTIN_GPIO TITAN_GPIO_MAX
+ 
+-extern int gpio_request(unsigned gpio, const char *label);
+-extern void gpio_free(unsigned gpio);
++#define gpio_to_irq(gpio)	-1
+ 
+-/* Common GPIO layer */
+-static inline int gpio_get_value(unsigned gpio)
+-{
+-	void __iomem *gpio_in =
+-		(void __iomem *)KSEG1ADDR(AR7_REGS_GPIO + AR7_GPIO_INPUT);
+-
+-	return readl(gpio_in) & (1 << gpio);
+-}
+-
+-static inline void gpio_set_value(unsigned gpio, int value)
+-{
+-	void __iomem *gpio_out =
+-		(void __iomem *)KSEG1ADDR(AR7_REGS_GPIO + AR7_GPIO_OUTPUT);
+-	unsigned tmp;
+-
+-	tmp = readl(gpio_out) & ~(1 << gpio);
+-	if (value)
+-		tmp |= 1 << gpio;
+-	writel(tmp, gpio_out);
+-}
+-
+-static inline int gpio_direction_input(unsigned gpio)
+-{
+-	void __iomem *gpio_dir =
+-		(void __iomem *)KSEG1ADDR(AR7_REGS_GPIO + AR7_GPIO_DIR);
+-
+-	if (gpio >= AR7_GPIO_MAX)
+-		return -EINVAL;
+-
+-	writel(readl(gpio_dir) | (1 << gpio), gpio_dir);
+-
+-	return 0;
+-}
+-
+-static inline int gpio_direction_output(unsigned gpio, int value)
+-{
+-	void __iomem *gpio_dir =
+-		(void __iomem *)KSEG1ADDR(AR7_REGS_GPIO + AR7_GPIO_DIR);
+-
+-	if (gpio >= AR7_GPIO_MAX)
+-		return -EINVAL;
+-
+-	gpio_set_value(gpio, value);
+-	writel(readl(gpio_dir) & ~(1 << gpio), gpio_dir);
+-
+-	return 0;
+-}
+-
+-static inline int gpio_to_irq(unsigned gpio)
+-{
+-	return -EINVAL;
+-}
+-
+-static inline int irq_to_gpio(unsigned irq)
+-{
+-	return -EINVAL;
+-}
++#define gpio_get_value __gpio_get_value
++#define gpio_set_value __gpio_set_value
+ 
+-/* Board specific GPIO functions */
+-static inline int ar7_gpio_enable(unsigned gpio)
+-{
+-	void __iomem *gpio_en =
+-		(void __iomem *)KSEG1ADDR(AR7_REGS_GPIO + AR7_GPIO_ENABLE);
+-
+-	writel(readl(gpio_en) | (1 << gpio), gpio_en);
+-
+-	return 0;
+-}
++#define gpio_cansleep __gpio_cansleep
+ 
+-static inline int ar7_gpio_disable(unsigned gpio)
+-{
+-	void __iomem *gpio_en =
+-		(void __iomem *)KSEG1ADDR(AR7_REGS_GPIO + AR7_GPIO_ENABLE);
+-
+-	writel(readl(gpio_en) & ~(1 << gpio), gpio_en);
+-
+-	return 0;
+-}
++/* Board specific GPIO functions */
++int ar7_gpio_enable(unsigned gpio);
++int ar7_gpio_disable(unsigned gpio);
+ 
+ #include <asm-generic/gpio.h>
+ 
+--- a/drivers/net/cpmac.c
++++ b/drivers/net/cpmac.c
+@@ -28,6 +28,7 @@
+ #include <linux/delay.h>
+ 
+ #include <linux/netdevice.h>
++#include <linux/if_vlan.h>
+ #include <linux/etherdevice.h>
+ #include <linux/ethtool.h>
+ #include <linux/skbuff.h>
+@@ -36,6 +37,7 @@
+ #include <linux/phy_fixed.h>
+ #include <linux/platform_device.h>
+ #include <linux/dma-mapping.h>
++#include <linux/clk.h>
+ #include <asm/gpio.h>
+ #include <asm/atomic.h>
+ 
+@@ -55,8 +57,8 @@ MODULE_PARM_DESC(debug_level, "Number of
+ MODULE_PARM_DESC(dumb_switch, "Assume switch is not connected to MDIO bus");
+ 
+ #define CPMAC_VERSION "0.5.1"
+-/* frame size + 802.1q tag */
+-#define CPMAC_SKB_SIZE		(ETH_FRAME_LEN + 4)
++/* frame size + 802.1q tag + FCS size */
++#define CPMAC_SKB_SIZE		(ETH_FRAME_LEN + ETH_FCS_LEN + VLAN_HLEN)
+ #define CPMAC_QUEUES	8
+ 
+ /* Ethernet registers */
+@@ -294,9 +296,16 @@ static int cpmac_mdio_write(struct mii_b
+ 
+ static int cpmac_mdio_reset(struct mii_bus *bus)
+ {
++	struct clk *cpmac_clk;
++
++	cpmac_clk = clk_get(&bus->dev, "cpmac");
++	if (IS_ERR(cpmac_clk)) {
++		printk(KERN_ERR "unable to get cpmac clock\n");
++		return -1;
++	}
+ 	ar7_device_reset(AR7_RESET_BIT_MDIO);
+ 	cpmac_write(bus->priv, CPMAC_MDIO_CONTROL, MDIOC_ENABLE |
+-		    MDIOC_CLKDIV(ar7_cpmac_freq() / 2200000 - 1));
++		    MDIOC_CLKDIV(clk_get_rate(cpmac_clk) / 2200000 - 1));
+ 	return 0;
+ }
+ 
+@@ -959,7 +968,7 @@ static int cpmac_open(struct net_device
+ 	struct sk_buff *skb;
+ 
+ 	mem = platform_get_resource_byname(priv->pdev, IORESOURCE_MEM, "regs");
+-	if (!request_mem_region(mem->start, mem->end - mem->start, dev->name)) {
++	if (!request_mem_region(mem->start, resource_size(mem), dev->name)) {
+ 		if (netif_msg_drv(priv))
+ 			printk(KERN_ERR "%s: failed to request registers\n",
+ 			       dev->name);
+@@ -967,7 +976,7 @@ static int cpmac_open(struct net_device
+ 		goto fail_reserve;
+ 	}
+ 
+-	priv->regs = ioremap(mem->start, mem->end - mem->start);
++	priv->regs = ioremap(mem->start, resource_size(mem));
+ 	if (!priv->regs) {
+ 		if (netif_msg_drv(priv))
+ 			printk(KERN_ERR "%s: failed to remap registers\n",
+@@ -1045,7 +1054,7 @@ fail_alloc:
+ 	iounmap(priv->regs);
+ 
+ fail_remap:
+-	release_mem_region(mem->start, mem->end - mem->start);
++	release_mem_region(mem->start, resource_size(mem));
+ 
+ fail_reserve:
+ 	return res;
+@@ -1073,7 +1082,7 @@ static int cpmac_stop(struct net_device
+ 	free_irq(dev->irq, dev);
+ 	iounmap(priv->regs);
+ 	mem = platform_get_resource_byname(priv->pdev, IORESOURCE_MEM, "regs");
+-	release_mem_region(mem->start, mem->end - mem->start);
++	release_mem_region(mem->start, resource_size(mem));
+ 	priv->rx_head = &priv->desc_ring[CPMAC_QUEUES];
+ 	for (i = 0; i < priv->ring_size; i++) {
+ 		if (priv->rx_head[i].skb) {
+@@ -1132,8 +1141,9 @@ static int __devinit cpmac_probe(struct
+ 	}
+ 
+ 	if (phy_id == PHY_MAX_ADDR) {
+-		dev_err(&pdev->dev, "no PHY present\n");
+-		return -ENODEV;
++		dev_err(&pdev->dev, "no PHY present, falling back to switch on MDIO bus 0\n");
++		strncpy(mdio_bus_id, "0", MII_BUS_ID_SIZE); /* fixed phys bus */
++		phy_id = pdev->id;
+ 	}
+ 
+ 	dev = alloc_etherdev_mq(sizeof(*priv), CPMAC_QUEUES);
+@@ -1165,7 +1175,7 @@ static int __devinit cpmac_probe(struct
+ 	priv->dev = dev;
+ 	priv->ring_size = 64;
+ 	priv->msg_enable = netif_msg_init(debug_level, 0xff);
+-	memcpy(dev->dev_addr, pdata->dev_addr, sizeof(dev->dev_addr));
++	memcpy(dev->dev_addr, pdata->dev_addr, sizeof(pdata->dev_addr));
+ 
+ 	snprintf(priv->phy_name, MII_BUS_ID_SIZE, PHY_ID_FMT, mdio_bus_id, phy_id);
+ 
+--- a/drivers/watchdog/ar7_wdt.c
++++ b/drivers/watchdog/ar7_wdt.c
+@@ -34,6 +34,7 @@
+ #include <linux/ioport.h>
+ #include <linux/io.h>
+ #include <linux/uaccess.h>
++#include <linux/clk.h>
+ 
+ #include <asm/addrspace.h>
+ #include <asm/mach-ar7/ar7.h>
+@@ -80,6 +81,8 @@ static struct resource *ar7_regs_wdt;
+ /* Pointer to the remapped WDT IO space */
+ static struct ar7_wdt *ar7_wdt;
+ 
++static struct clk *vbus_clk;
++
+ static void ar7_wdt_kick(u32 value)
+ {
+ 	WRITE_REG(ar7_wdt->kick_lock, 0x5555);
+@@ -138,17 +141,19 @@ static void ar7_wdt_disable(u32 value)
+ static void ar7_wdt_update_margin(int new_margin)
+ {
+ 	u32 change;
++	u32 vbus_rate;
+ 
+-	change = new_margin * (ar7_vbus_freq() / prescale_value);
++	vbus_rate = clk_get_rate(vbus_clk);
++	change = new_margin * (vbus_rate / prescale_value);
+ 	if (change < 1)
+ 		change = 1;
+ 	if (change > 0xffff)
+ 		change = 0xffff;
+ 	ar7_wdt_change(change);
+-	margin = change * prescale_value / ar7_vbus_freq();
++	margin = change * prescale_value / vbus_rate;
+ 	printk(KERN_INFO DRVNAME
+ 	       ": timer margin %d seconds (prescale %d, change %d, freq %d)\n",
+-	       margin, prescale_value, change, ar7_vbus_freq());
++	       margin, prescale_value, change, vbus_rate);
+ }
+ 
+ static void ar7_wdt_enable_wdt(void)
+@@ -214,7 +219,7 @@ static ssize_t ar7_wdt_write(struct file
+ static long ar7_wdt_ioctl(struct file *file,
+ 					unsigned int cmd, unsigned long arg)
+ {
+-	static struct watchdog_info ident = {
++	static const struct watchdog_info ident = {
+ 		.identity = LONGNAME,
+ 		.firmware_version = 1,
+ 		.options = (WDIOF_SETTIMEOUT | WDIOF_KEEPALIVEPING |
+@@ -262,6 +267,7 @@ static const struct file_operations ar7_
+ 	.unlocked_ioctl	= ar7_wdt_ioctl,
+ 	.open		= ar7_wdt_open,
+ 	.release	= ar7_wdt_release,
++	.llseek		= no_llseek,
+ };
+ 
+ static struct miscdevice ar7_wdt_miscdev = {
+@@ -298,6 +304,13 @@ static int __devinit ar7_wdt_probe(struc
+ 		goto out_mem_region;
+ 	}
+ 
++	vbus_clk = clk_get(NULL, "vbus");
++	if (IS_ERR(vbus_clk)) {
++		printk(KERN_ERR DRVNAME ": could not get vbus clock\n");
++		rc = PTR_ERR(vbus_clk);
++		goto out_mem_region;
++	}
++
+ 	ar7_wdt_disable_wdt();
+ 	ar7_wdt_prescale(prescale_value);
+ 	ar7_wdt_update_margin(margin);
+--- a/arch/mips/Kconfig
++++ b/arch/mips/Kconfig
+@@ -36,7 +36,8 @@ config AR7
+ 	select SYS_HAS_EARLY_PRINTK
+ 	select SYS_SUPPORTS_32BIT_KERNEL
+ 	select SYS_SUPPORTS_LITTLE_ENDIAN
+-	select GENERIC_GPIO
++	select ARCH_REQUIRE_GPIOLIB
++	select GPIO_SYSFS
+ 	select GCD
+ 	select VLYNQ
+ 	help

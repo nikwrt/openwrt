@@ -554,7 +554,7 @@
  
  #include <asm/uaccess.h>
  
-@@ -814,6 +815,13 @@ static int mtd_ioctl(struct inode *inode
+@@ -815,6 +816,13 @@ static int mtd_ioctl(struct inode *inode
  		file->f_pos = 0;
  		break;
  	}

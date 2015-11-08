@@ -133,7 +133,7 @@
  obj-$(CONFIG_EARLY_PRINTK)	+= early_printk.o
 +obj-$(CONFIG_MIPS_MACHINE)	+= mips_machine.o
  
- CFLAGS_cpu-bugs64.o	= $(shell if $(CC) $(KBUILD_CFLAGS) -Wa,-mdaddi -c -o /dev/null -xc /dev/null >/dev/null 2>&1; then echo "-DHAVE_AS_SET_DADDI"; fi)
+ CFLAGS_cpu-bugs64.o	= $(shell if $(CC) $(KBUILD_CFLAGS) -Wa,-mdaddi -c -o /dev/null -x c /dev/null >/dev/null 2>&1; then echo "-DHAVE_AS_SET_DADDI"; fi)
  
 --- a/arch/mips/Kconfig
 +++ b/arch/mips/Kconfig
@@ -157,7 +157,7 @@
  
  unsigned int vced_count, vcei_count;
  
-@@ -31,8 +32,12 @@ static int show_cpuinfo(struct seq_file 
+@@ -31,8 +32,12 @@ static int show_cpuinfo(struct seq_file
  	/*
  	 * For the first processor also print the system type
  	 */

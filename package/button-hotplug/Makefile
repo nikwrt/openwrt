@@ -18,6 +18,7 @@ define KernelPackage/button-hotplug
   TITLE:=Button Hotplug driver
   DEPENDS:=@LINUX_2_6
   FILES:=$(PKG_BUILD_DIR)/button-hotplug.$(LINUX_KMOD_SUFFIX)
+  AUTOLOAD:=$(call AutoLoad,64,button-hotplug)
   KCONFIG:=
 endef
 

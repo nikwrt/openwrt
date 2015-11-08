@@ -553,7 +553,7 @@ Subject: [PATCH] /opt/Projects/openwrt/target/linux/xburst/patches-2.6.31/001-co
  	BUG_ON(!__cpu_name[cpu]);
 --- a/arch/mips/mm/tlbex.c
 +++ b/arch/mips/mm/tlbex.c
-@@ -389,6 +389,11 @@ static void __cpuinit build_tlb_write_en
+@@ -383,6 +383,11 @@ static void __cpuinit build_tlb_write_en
  		tlbw(p);
  		break;
  

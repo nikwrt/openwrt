@@ -1,6 +1,6 @@
 --- a/drivers/char/random.c
 +++ b/drivers/char/random.c
-@@ -264,9 +264,9 @@
+@@ -279,9 +279,9 @@
  /*
   * Configuration information
   */
@@ -10,6 +10,6 @@
 +#define INPUT_POOL_WORDS 256
 +#define OUTPUT_POOL_WORDS 64
 +#define SEC_XFER_SIZE 1024
+ #define EXTRACT_SIZE 10
  
- /*
-  * The minimum number of bits of entropy before we wake up a read on
+ #define LONGS(x) (((x) + sizeof(unsigned long) - 1)/sizeof(unsigned long))

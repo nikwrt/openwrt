@@ -50,7 +50,7 @@
 + *             I didn't forget anybody). I apologize again for my lack of time.
 + *
 + *
-+ *             2008/06/17 - 2.6.25 - Changed imq.c to use qdisc_run() instead 
++ *             2008/06/17 - 2.6.25 - Changed imq.c to use qdisc_run() instead
 + *             of qdisc_restart() and moved qdisc_run() to tasklet to avoid
 + *             recursive locking. New initialization routines to fix 'rmmod' not
 + *             working anymore. Used code from ifb.c. (Jussi Kivilinna)
@@ -895,7 +895,7 @@
  extern void kfree_skb(struct sk_buff *skb);
  extern void consume_skb(struct sk_buff *skb);
  extern void	       __kfree_skb(struct sk_buff *skb);
-@@ -1972,6 +1991,10 @@ static inline void __nf_copy(struct sk_b
+@@ -1992,6 +2011,10 @@ static inline void __nf_copy(struct sk_b
  	dst->nfct_reasm = src->nfct_reasm;
  	nf_conntrack_get_reasm(src->nfct_reasm);
  #endif
@@ -945,7 +945,7 @@
  #include <linux/proc_fs.h>
  #include <linux/seq_file.h>
  #include <linux/stat.h>
-@@ -1704,7 +1707,11 @@ int dev_hard_start_xmit(struct sk_buff *
+@@ -1716,7 +1719,11 @@ int dev_hard_start_xmit(struct sk_buff *
  	int rc;
  
  	if (likely(!skb->next)) {
@@ -958,7 +958,7 @@
  			dev_queue_xmit_nit(skb, dev);
  
  		if (netif_needs_gso(dev, skb)) {
-@@ -1789,8 +1796,7 @@ u16 skb_tx_hash(const struct net_device
+@@ -1809,8 +1816,7 @@ u16 skb_tx_hash(const struct net_device
  }
  EXPORT_SYMBOL(skb_tx_hash);
  
@@ -968,7 +968,7 @@
  {
  	const struct net_device_ops *ops = dev->netdev_ops;
  	u16 queue_index = 0;
-@@ -1803,6 +1809,7 @@ static struct netdev_queue *dev_pick_tx(
+@@ -1823,6 +1829,7 @@ static struct netdev_queue *dev_pick_tx(
  	skb_set_queue_mapping(skb, queue_index);
  	return netdev_get_tx_queue(dev, queue_index);
  }
@@ -1109,7 +1109,7 @@
  	new->csum		= old->csum;
  	new->local_df		= old->local_df;
  	new->pkt_type		= old->pkt_type;
-@@ -2781,6 +2884,13 @@ void __init skb_init(void)
+@@ -2785,6 +2888,13 @@ void __init skb_init(void)
  						0,
  						SLAB_HWCACHE_ALIGN|SLAB_PANIC,
  						NULL);

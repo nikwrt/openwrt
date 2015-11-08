@@ -69,7 +69,7 @@
  #include <linux/fs.h>
 --- a/fs/fuse/inode.c
 +++ b/fs/fuse/inode.c
-@@ -1201,6 +1201,10 @@ static int __init fuse_init(void)
+@@ -1216,6 +1216,10 @@ static int __init fuse_init(void)
  	printk(KERN_INFO "fuse init (API version %i.%i)\n",
  	       FUSE_KERNEL_VERSION, FUSE_KERNEL_MINOR_VERSION);
  

@@ -124,7 +124,7 @@
  	unsigned int		custom_divisor;
 --- a/drivers/serial/8250.c
 +++ b/drivers/serial/8250.c
-@@ -409,6 +409,20 @@ static void mem_serial_out(struct uart_p
+@@ -410,6 +410,20 @@ static void mem_serial_out(struct uart_p
  	writeb(value, p->membase + offset);
  }
  
@@ -145,7 +145,7 @@
  static void mem32_serial_out(struct uart_port *p, int offset, int value)
  {
  	offset = map_8250_out_reg(p, offset) << p->regshift;
-@@ -502,6 +516,11 @@ static void set_io_from_upio(struct uart
+@@ -503,6 +517,11 @@ static void set_io_from_upio(struct uart
  		p->serial_out = mem32_serial_out;
  		break;
  
@@ -157,7 +157,7 @@
  #ifdef CONFIG_SERIAL_8250_AU1X00
  	case UPIO_AU:
  		p->serial_in = au_serial_in;
-@@ -534,6 +553,7 @@ serial_out_sync(struct uart_8250_port *u
+@@ -535,6 +554,7 @@ serial_out_sync(struct uart_8250_port *u
  	switch (p->iotype) {
  	case UPIO_MEM:
  	case UPIO_MEM32:
@@ -165,7 +165,7 @@
  #ifdef CONFIG_SERIAL_8250_AU1X00
  	case UPIO_AU:
  #endif
-@@ -2450,6 +2470,7 @@ static int serial8250_request_std_resour
+@@ -2451,6 +2471,7 @@ static int serial8250_request_std_resour
  	case UPIO_MEM32:
  	case UPIO_MEM:
  	case UPIO_DWAPB:
@@ -173,7 +173,7 @@
  		if (!up->port.mapbase)
  			break;
  
-@@ -2487,6 +2508,7 @@ static void serial8250_release_std_resou
+@@ -2488,6 +2509,7 @@ static void serial8250_release_std_resou
  	case UPIO_MEM32:
  	case UPIO_MEM:
  	case UPIO_DWAPB:
@@ -181,7 +181,7 @@
  		if (!up->port.mapbase)
  			break;
  
-@@ -2959,6 +2981,7 @@ static int __devinit serial8250_probe(st
+@@ -2960,6 +2982,7 @@ static int __devinit serial8250_probe(st
  		port.serial_in		= p->serial_in;
  		port.serial_out		= p->serial_out;
  		port.dev		= &dev->dev;
@@ -189,7 +189,7 @@
  		if (share_irqs)
  			port.irqflags |= IRQF_SHARED;
  		ret = serial8250_register_port(&port);
-@@ -3109,6 +3132,7 @@ int serial8250_register_port(struct uart
+@@ -3110,6 +3133,7 @@ int serial8250_register_port(struct uart
  		uart->port.iotype       = port->iotype;
  		uart->port.flags        = port->flags | UPF_BOOT_AUTOCONF;
  		uart->port.mapbase      = port->mapbase;
@@ -199,7 +199,7 @@
  			uart->port.dev = port->dev;
 --- a/drivers/serial/serial_core.c
 +++ b/drivers/serial/serial_core.c
-@@ -2161,6 +2161,7 @@ uart_report_port(struct uart_driver *drv
+@@ -2157,6 +2157,7 @@ uart_report_port(struct uart_driver *drv
  		snprintf(address, sizeof(address),
  			 "I/O 0x%lx offset 0x%x", port->iobase, port->hub6);
  		break;
@@ -207,7 +207,7 @@
  	case UPIO_MEM:
  	case UPIO_MEM32:
  	case UPIO_AU:
-@@ -2573,6 +2574,7 @@ int uart_match_port(struct uart_port *po
+@@ -2570,6 +2571,7 @@ int uart_match_port(struct uart_port *po
  	case UPIO_HUB6:
  		return (port1->iobase == port2->iobase) &&
  		       (port1->hub6   == port2->hub6);

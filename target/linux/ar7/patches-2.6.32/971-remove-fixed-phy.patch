@@ -1,0 +1,164 @@
+--- a/arch/mips/ar7/platform.c
++++ b/arch/mips/ar7/platform.c
+@@ -33,7 +33,6 @@
+ #include <linux/string.h>
+ #include <linux/etherdevice.h>
+ #include <linux/phy.h>
+-#include <linux/phy_fixed.h>
+ #include <linux/gpio.h>
+ #include <linux/clk.h>
+ 
+@@ -248,12 +247,6 @@ static struct resource cpmac_high_res[]
+ 	},
+ };
+ 
+-static struct fixed_phy_status fixed_phy_status __initdata = {
+-	.link		= 1,
+-	.speed		= 100,
+-	.duplex		= 1,
+-};
+-
+ static struct plat_cpmac_data cpmac_low_data = {
+ 	.reset_bit	= 17,
+ 	.power_bit	= 20,
+@@ -648,26 +641,18 @@ static int __init ar7_register_devices(v
+ 	}
+ 
+ 	if (ar7_has_high_cpmac()) {
+-		res = fixed_phy_add(PHY_POLL, cpmac_high.id, &fixed_phy_status);
+-		if (!res) {
+-			cpmac_get_mac(1, cpmac_high_data.dev_addr);
+-
+-			res = platform_device_register(&cpmac_high);
+-			if (res)
+-				pr_warning("unable to register cpmac-high: %d\n", res);
+-		} else
+-			pr_warning("unable to add cpmac-high phy: %d\n", res);
+-	} else
+-		cpmac_low_data.phy_mask = 0xffffffff;
++		cpmac_get_mac(1, cpmac_high_data.dev_addr);
+ 
+-	res = fixed_phy_add(PHY_POLL, cpmac_low.id, &fixed_phy_status);
+-	if (!res) {
+-		cpmac_get_mac(0, cpmac_low_data.dev_addr);
+-		res = platform_device_register(&cpmac_low);
++		res = platform_device_register(&cpmac_high);
+ 		if (res)
+-			pr_warning("unable to register cpmac-low: %d\n", res);
++			pr_warning("unable to register cpmac-high: %d\n", res);
+ 	} else
+-		pr_warning("unable to add cpmac-low phy: %d\n", res);
++		cpmac_low_data.phy_mask = 0xffffffff;
++
++	cpmac_get_mac(0, cpmac_low_data.dev_addr);
++	res = platform_device_register(&cpmac_low);
++	if (res)
++		pr_warning("unable to register cpmac-low: %d\n", res);
+ 
+ 	detect_leds();
+ 	res = platform_device_register(&ar7_gpio_leds);
+--- a/drivers/net/cpmac.c
++++ b/drivers/net/cpmac.c
+@@ -220,6 +220,12 @@ static void cpmac_hw_stop(struct net_dev
+ static int cpmac_stop(struct net_device *dev);
+ static int cpmac_open(struct net_device *dev);
+ 
++static struct fixed_phy_status fixed_phy_status = {
++	.link = 1,
++	.speed = 100,
++	.duplex = 1,
++};
++
+ static void cpmac_dump_regs(struct net_device *dev)
+ {
+ 	int i;
+@@ -1113,8 +1119,6 @@ static const struct net_device_ops cpmac
+ 	.ndo_set_mac_address	= eth_mac_addr,
+ };
+ 
+-static int external_switch;
+-
+ static int __devinit cpmac_probe(struct platform_device *pdev)
+ {
+ 	int rc, phy_id;
+@@ -1126,27 +1130,48 @@ static int __devinit cpmac_probe(struct
+ 
+ 	pdata = pdev->dev.platform_data;
+ 
+-	if (external_switch || dumb_switch) {
+-		strncpy(mdio_bus_id, "0", MII_BUS_ID_SIZE); /* fixed phys bus */
+-		phy_id = pdev->id;
+-	} else {
+-		for (phy_id = 0; phy_id < PHY_MAX_ADDR; phy_id++) {
+-			if (!(pdata->phy_mask & (1 << phy_id)))
+-				continue;
+-			if (!cpmac_mii->phy_map[phy_id])
+-				continue;
+-			strncpy(mdio_bus_id, cpmac_mii->id, MII_BUS_ID_SIZE);
+-			break;
+-		}
+-	}
++	for (phy_id = 0; phy_id < PHY_MAX_ADDR; phy_id++) {
++		if (!(pdata->phy_mask & (1 << phy_id)))
++			continue;
++		if (!cpmac_mii->phy_map[phy_id])
++			continue;
++		strncpy(mdio_bus_id, cpmac_mii->id, MII_BUS_ID_SIZE);
++		break;
++	}
++
++	if (phy_id < PHY_MAX_ADDR)
++		goto dev_alloc;
++
++	dev_info(&pdev->dev, "trying external MII\n");
++	/* Now disable EPHY and enable MII */
++	ar7_device_disable(AR7_RESET_BIT_EPHY);
++	*(unsigned long*) ioremap(0x08611A08, 4) |= 0x00000001;
++
++	for (phy_id = 0; phy_id < PHY_MAX_ADDR; phy_id++) {
++		if (!(pdata->phy_mask & (1 << phy_id)))
++			continue;
++		if (!cpmac_mii->phy_map[phy_id])
++			continue;
++		strncpy(mdio_bus_id, cpmac_mii->id, MII_BUS_ID_SIZE);
++		break;
++	}
++
++	if (phy_id < PHY_MAX_ADDR)
++		goto dev_alloc;
++
++	/* This still does not work, so now we register a fixed phy */
++	dev_info(&pdev->dev, "using fixed PHY\n");
++	rc = fixed_phy_add(PHY_POLL, pdev->id, &fixed_phy_status);
++	if (rc && rc != -ENODEV) {
++		dev_err(&pdev->dev, "unable to register fixed PHY\n");
++		return rc;
++ 	}
+ 
+-	if (phy_id == PHY_MAX_ADDR) {
+-		dev_err(&pdev->dev, "no PHY present, falling back to switch on MDIO bus 0\n");
+-		strncpy(mdio_bus_id, "0", MII_BUS_ID_SIZE); /* fixed phys bus */
+-		phy_id = pdev->id;
+-	}
++	strncpy(mdio_bus_id, "0", MII_BUS_ID_SIZE); /* fixed phys bus */
++	phy_id = pdev->id;
+ 
+-	dev = alloc_etherdev_mq(sizeof(*priv), CPMAC_QUEUES);
++dev_alloc:
++ 	dev = alloc_etherdev_mq(sizeof(*priv), CPMAC_QUEUES);
+ 
+ 	if (!dev) {
+ 		printk(KERN_ERR "cpmac: Unable to allocate net_device\n");
+@@ -1271,12 +1296,6 @@ int __devinit cpmac_init(void)
+ 		else
+ 			msleep(10);
+ 
+-	mask &= 0x7fffffff;
+-	if (mask & (mask - 1)) {
+-		external_switch = 1;
+-		mask = 0;
+-	}
+-
+ 	cpmac_mii->phy_mask = ar7_is_titan()? ~(mask | 0x80000000 | 0x40000000):
+ 		~(mask | 0x80000000);
+ 	snprintf(cpmac_mii->id, MII_BUS_ID_SIZE, "1");

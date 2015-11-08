@@ -283,8 +283,8 @@
 +#include <linux/lzo.h>
  #include "lzodefs.h"
  
- #define HAVE_IP(x, ip_end, ip) ((size_t)(ip_end - ip) < (x))
-@@ -244,9 +246,10 @@ lookbehind_overrun:
+ #define HAVE_IP(x)      ((size_t)(ip_end - ip) >= (size_t)(x))
+@@ -258,9 +260,10 @@ lookbehind_overrun:
  	*out_len = op - out;
  	return LZO_E_LOOKBEHIND_OVERRUN;
  }

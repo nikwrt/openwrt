@@ -1,0 +1,17 @@
+#!/bin/sh /etc/rc.common
+
+START=05
+STOP=95
+MYSELF=/etc/init.d/fixtime
+
+start () {
+	if [ $(date +%s) -lt 1000000000 ]; then
+		date -s $(date +%Y%m%d%H%M$S -D%s -d $(stat -c%Y $MYSELF))
+	fi
+}
+
+stop () {
+	if [ $(date +%s) -gt $(( $(stat -c%Y $MYSELF) + 31536000 )) ]; then
+		[[ -w $MYSELF ]] && cat /dev/null >> $MYSELF && touch $MYSELF
+	fi
+}
