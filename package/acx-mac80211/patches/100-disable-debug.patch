@@ -1,0 +1,139 @@
+--- a/acx_config.h
++++ b/acx_config.h
+@@ -28,7 +28,7 @@
+ /* set to 1 if you want some debugging */
+ /* set to 2 if you want extensive debug log */
+ 
+-#define ACX_DEBUG 2
++#define ACX_DEBUG 0
+ 
+ //	L_LOCK|		/* locking debug log */
+ //	L_INIT|		/* special card initialization logging */
+--- a/acx_func.h
++++ b/acx_func.h
+@@ -129,6 +129,8 @@
+ #else
+ 
+ #define log(chan, args...)
++#define logf0	log
++#define logf1	log
+ /* Standard way of log flood prevention */
+ #define printk_ratelimited(args...) \
+ do { \
+--- a/debug.c
++++ b/debug.c
+@@ -39,15 +39,26 @@
+ #include "debug.h"
+ 
+ enum file_index {
+-	INFO, DIAG, EEPROM, PHY, DEBUG,
+-	SENSITIVITY, TX_LEVEL, ANTENNA, REG_DOMAIN,
++	INFO, 
++	DIAG, 
++	EEPROM, 
++	PHY, 
++#if (ACX_DEBUG)
++	DEBUG,
++#endif
++	SENSITIVITY, 
++	TX_LEVEL, 
++	ANTENNA, 
++	REG_DOMAIN,
+ };
+ static const char *const dbgfs_files[] = {
+ 	[INFO]		= "info",
+ 	[DIAG]		= "diag",
+ 	[EEPROM]	= "eeprom",
+ 	[PHY]		= "phy",
++#if (ACX_DEBUG)
+ 	[DEBUG]		= "debug",
++#endif
+ 	[SENSITIVITY]	= "sensitivity",
+ 	[TX_LEVEL]	= "tx_level",
+ 	[ANTENNA]	= "antenna",
+@@ -576,6 +587,7 @@ static int acx_dbgfs_show_phy(struct seq_file *file, void *v)
+ 	return 0;
+ }
+ 
++#if (ACX_DEBUG)
+ static int acx_dbgfs_show_debug(struct seq_file *file, void *v)
+ {
+ 	/* No sem locking required, since debug is global for all devices */
+@@ -609,6 +621,7 @@ static ssize_t acx_dbgfs_write_debug(acx_device_t *adev, struct file *file,
+ 
+ 	return ret;
+ }
++#endif
+ 
+ static int acx_dbgfs_show_sensitivity(struct seq_file *file, void *v)
+ {
+@@ -803,7 +816,9 @@ static acx_dbgfs_show_t *const acx_dbgfs_show_funcs[] = {
+ 	acx_dbgfs_show_diag,
+ 	acx_dbgfs_show_eeprom,
+ 	acx_dbgfs_show_phy,
++#if (ACX_DEBUG)
+ 	acx_dbgfs_show_debug,
++#endif
+ 	acx_dbgfs_show_sensitivity,
+ 	acx_dbgfs_show_tx_level,
+ 	acx_dbgfs_show_antenna,
+@@ -815,7 +830,9 @@ static acx_dbgfs_write_t *const acx_dbgfs_write_funcs[] = {
+ 	acx_dbgfs_write_diag,
+ 	NULL,
+ 	NULL,
++#if (ACX_DEBUG)
+ 	acx_dbgfs_write_debug,
++#endif
+ 	acx_dbgfs_write_sensitivity,
+ 	acx_dbgfs_write_tx_level,
+ 	acx_dbgfs_write_antenna,
+@@ -835,7 +852,9 @@ static int acx_dbgfs_open(struct inode *inode, struct file *file)
+ 	case DIAG:
+ 	case EEPROM:
+ 	case PHY:
++#if (ACX_DEBUG)
+ 	case DEBUG:
++#endif
+ 	case SENSITIVITY:
+ 	case TX_LEVEL:
+ 	case ANTENNA:
+@@ -864,7 +883,9 @@ static ssize_t acx_dbgfs_write(struct file *file, const char __user *buf,
+ 	case DIAG:
+ 	case EEPROM:
+ 	case PHY:
++#if (ACX_DEBUG)
+ 	case DEBUG:
++#endif
+ 	case SENSITIVITY:
+ 	case TX_LEVEL:
+ 	case ANTENNA:
+--- a/interrupt-masks.h
++++ b/interrupt-masks.h
+@@ -99,7 +99,7 @@ static u16 interrupt_masks[DEVTYPE_MAX][CHIPTYPE_MAX] = {
+ };
+ 
+ #if (ACX_DEBUG < 2)
+-inline void interrupt_sanity_checks(void) {}
++#define interrupt_sanity_checks(adev)
+ #else
+ 
+ static const char *devtype_names[] = { "PCI", "USB", "MEM" };
+--- a/rx.c
++++ b/rx.c
+@@ -63,6 +63,7 @@ u8 acx_signal_determine_quality(u8 signal, u8 noise)
+ 	return qual;
+ }
+ 
++#if (ACX_DEBUG)
+ const char* acx_get_packet_type_string(u16 fc)
+ {
+ 	static const char * const mgmt_arr[] = {
+@@ -102,7 +103,7 @@ const char* acx_get_packet_type_string(u16 fc)
+ 	}
+ 	return str;
+ }
+-
++#endif
+ 
+ /*
+  * acx_l_rx
