@@ -36,6 +36,7 @@ BINUTILS_CONFIGURE:= \
 		--host=$(GNU_HOST_NAME) \
 		--target=$(REAL_GNU_TARGET_NAME) \
 		--with-sysroot=$(TOOLCHAIN_DIR) \
+		MAKEINFO=missing \
 		--disable-multilib \
 		--disable-werror \
 		--disable-nls \
